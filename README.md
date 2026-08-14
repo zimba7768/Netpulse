@@ -29,7 +29,8 @@
   when it arrived, and where it came from.
 - **Live throughput** — a two-minute rolling graph, plus a tray icon whose
   arrows brighten with activity.
-- **Your public IP** — shown beside the dashboard title, click to copy.
+- **Your public IP** — shown beside the dashboard title, click to copy. Follows
+  a VPN within seconds of it connecting or dropping.
 - **Local and private** — one SQLite file in `%APPDATA%\NetPulse`. No account,
   no cloud, no telemetry. The *only* outbound request it ever makes is the
   public-IP lookup, and that can be switched off in Settings.
@@ -132,7 +133,15 @@ Two sources that reinforce each other:
 Your router knows its WAN address but there is no vendor-neutral way to ask it,
 so NetPulse does what every other tool does: asks an external service what
 address the request appeared to come from. It tries ipify.org and a few
-alternatives in turn, once at start-up and then every 15 minutes.
+alternatives in turn.
+
+Rather than poll frequently, it watches your **local network adapters**, which
+costs nothing and changes the moment a VPN connects or drops. When that
+happens the address is re-checked within a couple of seconds — and again a few
+times after, because a VPN adapter appears before its routes are ready, so the
+first answer can still be the old address. A slow periodic check every 15
+minutes remains as a backstop for changes with no local cause, such as an ISP
+lease renewal.
 
 That is a small outbound request from an application built to watch outbound
 requests, so it is worth stating plainly: it sends nothing but the request

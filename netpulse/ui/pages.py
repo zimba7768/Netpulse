@@ -161,6 +161,9 @@ class DashboardPage(Page):
         self.wan_chip = WanIpChip()
         self.add_header_widget(self.wan_chip)
         engine.wan.resolved.connect(self.wan_chip.set_address)
+        # A VPN going up or down shows as "checking…" straight away, so the
+        # displayed address is never silently stale.
+        engine.wan.rechecking.connect(self._wan_rechecking)
         self.wan_chip.update_from(engine.wan, settings.get("show_wan_ip", True))
 
         tiles = QHBoxLayout()
@@ -204,6 +207,10 @@ class DashboardPage(Page):
 
         self.content.addLayout(columns, 1)
         self._file_paths: list[str] = []
+
+    def _wan_rechecking(self) -> None:
+        if self.settings.get("show_wan_ip", True):
+            self.wan_chip.set_checking()
 
     def _open_file_row(self, item) -> None:
         row = item.row()

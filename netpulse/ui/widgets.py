@@ -130,6 +130,13 @@ class WanIpChip(QFrame):
         self.value.setStyleSheet(f"color:{theme.MUTED};")
         self.setToolTip("Public IP lookup is switched off in Settings.")
 
+    def set_checking(self) -> None:
+        self._address = ""
+        self._restore.stop()
+        self.value.setText("checking…")
+        self.value.setStyleSheet(f"color:{theme.MUTED};")
+        self.setToolTip("Looking up your public IP address…")
+
     def update_from(self, resolver, enabled: bool) -> None:
         """Reflect the resolver's current state, including 'not asked yet'."""
         if not enabled:
@@ -139,10 +146,7 @@ class WanIpChip(QFrame):
         elif resolver.checked_at:
             self.set_address("", "")          # asked, and nothing answered
         else:
-            self._address = ""
-            self.value.setText("checking…")
-            self.value.setStyleSheet(f"color:{theme.MUTED};")
-            self.setToolTip("Looking up your public IP address…")
+            self.set_checking()
 
     def _show_address(self) -> None:
         self.value.setText(self._address or "unavailable")
