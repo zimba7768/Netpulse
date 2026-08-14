@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -79,6 +80,31 @@ class TaskDefinitionTests(unittest.TestCase):
             ET.fromstring(xml.encode("utf-16"))     # still parses
         finally:
             autostart.app_root = original
+
+
+class FrozenBuildTests(unittest.TestCase):
+    """A PyInstaller build must resolve paths to the .exe, not to _MEIPASS."""
+
+    def tearDown(self) -> None:
+        if hasattr(sys, "frozen"):
+            del sys.frozen
+
+    def test_app_root_follows_the_executable_when_frozen(self):
+        loose = autostart.app_root()
+        sys.frozen = True                       # what PyInstaller sets
+        frozen = autostart.app_root()
+        self.assertEqual(frozen, Path(sys.executable).resolve().parent)
+        self.assertNotEqual(frozen, loose,
+                            "frozen builds must not use the source tree path")
+
+    def test_launch_parts_drops_the_script_argument_when_frozen(self):
+        sys.frozen = True
+        command, arguments, workdir = autostart.launch_parts()
+        self.assertEqual(command, sys.executable,
+                         "the exe launches itself, not an interpreter")
+        self.assertNotIn("main.py", arguments)
+        self.assertIn("--tray", arguments)
+        self.assertEqual(workdir, str(Path(sys.executable).resolve().parent))
 
 
 class LaunchCommandTests(unittest.TestCase):

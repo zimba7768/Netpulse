@@ -44,6 +44,15 @@ def is_admin() -> bool:
 
 
 def app_root() -> Path:
+    """The folder the application lives in.
+
+    In a PyInstaller build ``__file__`` points inside the temporary extraction
+    directory, which is deleted when the process exits — useless as a working
+    directory for a startup entry. The executable's own folder is the stable
+    answer there.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
 
 

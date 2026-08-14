@@ -2,13 +2,13 @@
 
 <p align="center">
   A network usage monitor for Windows.<br>
-  How much you upload and download â€” per hour, day, week, month and year â€”
+  How much you upload and download — per hour, day, week, month and year —
   broken down by application, with a log of the files that arrive on your machine.
 </p>
 
 <p align="center">
-  <a href="https://github.com/zimba7768/netpulse/actions/workflows/tests.yml">
-    <img alt="tests" src="https://github.com/zimba7768/netpulse/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="https://github.com/YOUR-USERNAME/netpulse/actions/workflows/tests.yml">
+    <img alt="tests" src="https://github.com/YOUR-USERNAME/netpulse/actions/workflows/tests.yml/badge.svg"></a>
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4">
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3776ab">
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/badge/licence-MIT-green"></a>
@@ -20,16 +20,16 @@
 
 ## What it does
 
-- **Totals for every period you'd want** â€” this hour, today, this week, this
+- **Totals for every period you'd want** — this hour, today, this week, this
   month, this year, all time. Hourly, daily, weekly, monthly and yearly charts,
   each hoverable, each also rendered as a plain table.
-- **Per-application breakdown** â€” which programs actually used the connection,
+- **Per-application breakdown** — which programs actually used the connection,
   ranked, for any period.
-- **A file log** â€” every file that lands in your watched folders, with its size,
+- **A file log** — every file that lands in your watched folders, with its size,
   when it arrived, and where it came from.
-- **Live throughput** â€” a two-minute rolling graph, plus a tray icon whose
+- **Live throughput** — a two-minute rolling graph, plus a tray icon whose
   arrows brighten with activity.
-- **Local and private** â€” one SQLite file in `%APPDATA%\NetPulse`. No account,
+- **Local and private** — one SQLite file in `%APPDATA%\NetPulse`. No account,
   no cloud, no telemetry, no network calls of its own.
 
 ## Screenshots
@@ -37,55 +37,69 @@
 <details>
 <summary>History, Applications and Files</summary>
 
-**History** â€” five bucketings of the same data, with the numbers repeated as a
+**History** — five bucketings of the same data, with the numbers repeated as a
 table underneath.
 
 ![Monthly history](docs/screenshots/history-month.png)
 ![Hourly history](docs/screenshots/history-hour.png)
 
-**Applications** â€” which programs used the connection.
+**Applications** — which programs used the connection.
 
 ![Applications](docs/screenshots/applications.png)
 
-**Files** â€” what arrived, how big, and from where.
+**Files** — what arrived, how big, and from where.
 
 ![Files](docs/screenshots/files.png)
 
 </details>
 
-## Install
+## Download
+
+**[Grab the latest `NetPulse.exe` from Releases](../../releases/latest)** — one
+file, no Python required. Put it anywhere and run it; for the per-application
+breakdown, right-click and **Run as administrator**.
+
+Windows SmartScreen will warn the first time because the file isn't
+code-signed (signing certificates cost money). **More info → Run anyway**. Each
+release lists the executable's SHA-256 if you want to verify it, and it's built
+in the open by [this workflow](.github/workflows/release.yml) from the tagged
+source — nothing is uploaded from a personal machine.
+
+Prefer to run from source? Read on.
+
+## Install from source
 
 Requires **Windows 10 or 11** and **Python 3.10+**.
 
 1. Download or clone this repository.
-2. Double-click **`install.bat`**. It locates Python for you â€” the `py`
+2. Double-click **`install.bat`**. It locates Python for you — the `py`
    launcher, your `PATH`, the registry, the usual python.org locations, and
-   Anaconda / Miniconda â€” then installs the dependencies.
+   Anaconda / Miniconda — then installs the dependencies.
    If it finds no suitable Python it offers to install one via winget.
 3. Start it:
-   - **`run.bat`** â€” normal start.
-   - **`run-as-admin.bat`** â€” start elevated, which additionally enables the
+   - **`run.bat`** — normal start.
+   - **`run-as-admin.bat`** — start elevated, which additionally enables the
      per-application breakdown.
 
 Optionally run **`make-shortcut.bat`** for a Desktop shortcut carrying the app's
 own icon, which you can drag to the taskbar to pin.
 
 The interpreter that ends up being used is cached in `python-path.txt`. To point
-NetPulse at a different Python, edit that file â€” one line, the full path to
+NetPulse at a different Python, edit that file — one line, the full path to
 `python.exe`.
 
 ## How it measures
 
 Three independent sources, and it's worth knowing which number comes from where.
 
-### Totals â€” adapter counters
+### Totals — adapter counters
 
 Machine-wide upload and download come from the byte counters Windows keeps per
 network adapter, the same source Task Manager uses. Exact, never misses traffic,
 needs no special permissions. Virtual adapters (Hyper-V, WSL, VMware,
 VirtualBox, loopback) are excluded so nothing is counted twice.
 
-### Per-application â€” kernel network trace
+### Per-application — kernel network trace
 
 Windows exposes no ordinary API for per-process byte counts. NetPulse reads what
 Task Manager's own network column reads: the `Microsoft-Windows-Kernel-Network`
@@ -97,16 +111,16 @@ one feature that needs the elevated start. Without it everything else still
 works and the Applications page says so. Traffic to `127.0.0.1` is excluded, so
 local dev servers don't inflate the numbers.
 
-### Files â€” watched folders + browser history
+### Files — watched folders + browser history
 
 Two sources that reinforce each other:
 
 - **Folder watching** sees every file that lands in Downloads, Desktop,
-  Documents, Pictures, Videos and Music â€” whatever put it there: a browser, a
+  Documents, Pictures, Videos and Music — whatever put it there: a browser, a
   torrent client, Steam, an installer, a copy from a network share. A file is
   only logged once its size stops changing, so half-finished `.crdownload` and
   `.part` files never appear.
-- **Browser download history** (Chrome, Edge, Brave, Opera, Vivaldi, Firefox â€”
+- **Browser download history** (Chrome, Edge, Brave, Opera, Vivaldi, Firefox —
   all profiles) supplies what folder watching can't know: the **source URL**.
   Records are matched back by path, and downloads that landed outside a watched
   folder are added from here too.
@@ -115,7 +129,7 @@ Two sources that reinforce each other:
 
 **Track individual file uploads.** Seeing a photo posted to a website or an
 attachment sent through webmail would mean decrypting your HTTPS traffic through
-a local proxy â€” installing a root certificate, breaking every app that pins its
+a local proxy — installing a root certificate, breaking every app that pins its
 certificate, and getting flagged by antivirus. It would also still miss anything
 that bypasses the system proxy. NetPulse doesn't go there. What it gives you
 instead is upload **volume** per application and per period, which answers "what
@@ -123,19 +137,19 @@ has been uploading?" without touching encrypted traffic.
 
 ## Starting with Windows
 
-Off by default; turn it on in **Settings â†’ Appearance and behaviour**. The line
+Off by default; turn it on in **Settings → Appearance and behaviour**. The line
 under the tick box always says which of two mechanisms is in use:
 
-- **Scheduled task** â€” used when NetPulse is elevated at the moment you tick the
+- **Scheduled task** — used when NetPulse is elevated at the moment you tick the
   box. Windows starts it elevated and silently at sign-in, so per-application
   tracking works from the start. It lives in Task Scheduler and, importantly,
   **does not appear in Task Manager's Startup tab**.
-- **Startup entry** â€” the fallback when NetPulse isn't elevated. Windows always
+- **Startup entry** — the fallback when NetPulse isn't elevated. Windows always
   launches `Run` entries unelevated and cannot show a UAC prompt at sign-in, so
   per-application tracking will be off.
 
 So: start with `run-as-admin.bat`, then tick the box. If you already ticked it
-unelevated, start elevated and untick/re-tick â€” it upgrades itself.
+unelevated, start elevated and untick/re-tick — it upgrades itself.
 
 ## Storage and retention
 
@@ -168,9 +182,14 @@ python tools/screenshot.py out/     # render every page offscreen, with demo dat
 python tools/smoketest.py           # run the real engine against real traffic
 ```
 
-`tools/screenshot.py` is how the images above are produced â€” it seeds a database
+`tools/screenshot.py` is how the images above are produced — it seeds a database
 with a year of plausible traffic and grabs each page with the offscreen Qt
 platform, so the interface can be reviewed without a desktop session.
+
+To build the standalone executable yourself, run **`build-exe.bat`** (or
+`pyinstaller netpulse.spec`). The result is `dist\NetPulse.exe`. The same spec
+file is what the release workflow uses, so a local build and a published one are
+identical.
 
 <details>
 <summary>Layout</summary>
@@ -213,11 +232,11 @@ for colour-vision deficiency against the dark surface.
 
 **"No Python 3.10 or newer was found."** Run `py -0p` in a Command Prompt to
 list every interpreter the launcher knows about, then paste the full path into
-`python-path.txt` and run `install.bat` again. Anaconda is fine â€” it just keeps
+`python-path.txt` and run `install.bat` again. Anaconda is fine — it just keeps
 itself off the system `PATH`, which is the usual reason `python` "isn't found"
 on a machine that clearly has it.
 
-**"pywintrace is not installed."** `pip install pywintrace` â€” the current
+**"pywintrace is not installed."** `pip install pywintrace` — the current
 release is 0.2.0, don't pin higher. It's optional; only the per-application
 breakdown needs it.
 
@@ -226,7 +245,7 @@ Run `logman stop NetPulseKernelNet -ets` in an elevated Command Prompt and
 restart.
 
 **Numbers look higher than my ISP reports.** Adapter counters include protocol
-overhead and local network traffic â€” copying from a NAS, casting to a TV. ISPs
+overhead and local network traffic — copying from a NAS, casting to a TV. ISPs
 count only what crosses their border.
 
 **A VPN is running and totals look doubled.** Some VPN clients present a second
@@ -234,8 +253,8 @@ adapter carrying the same traffic. Most are excluded by name already; if yours
 isn't, add it to `EXCLUDE_HINTS` in `netpulse/collectors/net_system.py`.
 
 **I ticked "start when I sign in" but it's not in Task Manager's Startup tab.**
-Expected if it registered as a scheduled task â€” check `taskschd.msc` instead.
+Expected if it registered as a scheduled task — check `taskschd.msc` instead.
 
 ## Licence
 
-MIT â€” see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

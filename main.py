@@ -1,4 +1,4 @@
-"""NetPulse â€” a network usage monitor for Windows.
+"""NetPulse — a network usage monitor for Windows.
 
     python main.py            open the window
     python main.py --tray     start hidden in the notification area
@@ -27,7 +27,7 @@ from netpulse.ui.tray import app_icon
 
 SINGLE_INSTANCE_KEY = "NetPulse.SingleInstance.v1"
 
-#: Windows groups taskbar buttons â€” and picks their icon â€” by this string.
+#: Windows groups taskbar buttons — and picks their icon — by this string.
 #: Without an explicit one the process inherits pythonw.exe's identity, which
 #: is why an unconfigured PySide app shows the Python logo on the taskbar even
 #: though its window icon is set correctly. This must be set before any window
@@ -71,8 +71,13 @@ def main() -> int:
     # Application-wide default: covers the taskbar button, alt-tab and every
     # dialog, not just the main window.
     app.setWindowIcon(app_icon())
-    # A real .ico on disk, for anyone making a shortcut or pinning it.
-    icon_file = Path(__file__).resolve().parent / "netpulse.ico"
+    # A real .ico on disk, for anyone making a shortcut or pinning it. In a
+    # frozen build the source folder is a temporary directory, so the icon goes
+    # beside the executable instead.
+    if getattr(sys, "frozen", False):
+        icon_file = Path(sys.executable).resolve().parent / "netpulse.ico"
+    else:
+        icon_file = Path(__file__).resolve().parent / "netpulse.ico"
     written = write_ico(icon_file)
     if "--write-ico" in sys.argv:
         print(f"Wrote {written}" if written
