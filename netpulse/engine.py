@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, Signal
 from .collectors.files import FileTracker
 from .collectors.net_etw import EtwNetCollector
 from .collectors.net_system import SystemNetCollector
+from .collectors.wanip import WanIpResolver
 
 LIVE_WINDOW_SECONDS = 120
 
@@ -33,6 +34,7 @@ class Engine(QObject):
         self.system = SystemNetCollector()
         self.etw = EtwNetCollector()
         self.files = FileTracker(db, settings, on_new=self._on_file)
+        self.wan = WanIpResolver()
         self.live: deque[tuple[float, float, float]] = deque(maxlen=LIVE_WINDOW_SECONDS)
         self.session_down = 0
         self.session_up = 0
@@ -79,6 +81,8 @@ class Engine(QObject):
             self.etw.start()
         if self.settings.get("track_files", True):
             self.files.start()
+        if self.settings.get("show_wan_ip", True):
+            self.wan.start()
         self.db.rollup(since=0)          # heal anything a previous crash left behind
         self.system.reset()
         self._stop.clear()
@@ -92,6 +96,7 @@ class Engine(QObject):
             self._thread.join(timeout=3)
         self.files.stop()
         self.etw.stop()
+        self.wan.stop()
         try:
             self.db.rollup(since=time.time() - 7200)
         except Exception:
@@ -102,6 +107,14 @@ class Engine(QObject):
         if not paused:
             self.system.reset()          # do not bank the traffic that ran while paused
         self.status_changed.emit(self.status_text())
+
+    def enable_wan_ip(self, enabled: bool) -> None:
+        self.settings.set("show_wan_ip", bool(enabled))
+        if enabled:
+            self.wan.start()
+            self.wan.refresh_now()
+        else:
+            self.wan.stop()
 
     def enable_per_app(self, enabled: bool) -> None:
         self.settings.set("track_per_app", bool(enabled))

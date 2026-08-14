@@ -105,6 +105,18 @@ QLabel#TileLabel {{
 }}
 QLabel#TileValue {{ font-size: 26px; font-weight: 600; color: {TEXT}; }}
 QLabel#TileUnit  {{ font-size: 13px; color: {TEXT_SECONDARY}; }}
+QFrame#Chip {{
+    background: {SURFACE};
+    border: 1px solid {BORDER_SOLID};
+    border-radius: 16px;
+}}
+QFrame#Chip:hover {{ border-color: {rgba(DOWN, 0.55)}; }}
+QLabel#ChipLabel {{
+    font-size: 10px; color: {MUTED}; letter-spacing: 0.8px;
+}}
+QLabel#ChipValue {{
+    font-size: 13px; font-weight: 600; color: {TEXT};
+}}
 QLabel#PageTitle {{ font-size: 22px; font-weight: 600; }}
 QLabel#PageHint  {{ font-size: 12.5px; color: {MUTED}; }}
 QLabel#Status    {{ font-size: 11.5px; color: {MUTED}; }}

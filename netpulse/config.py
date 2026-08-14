@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "NetPulse"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -49,6 +49,7 @@ DEFAULTS: dict[str, Any] = {
     "track_files": True,
     "watch_folders": None,            # None -> default_watch_folders() at load
     "read_browser_history": True,
+    "show_wan_ip": True,              # needs one small outbound request
     "min_file_bytes": 16 * 1024,      # ignore trivial files (temp, .crdownload stubs)
     "ignore_extensions": [".tmp", ".crdownload", ".part", ".partial", ".download"],
     # --- retention (days); 0 means "keep forever" -------------------------

@@ -20,7 +20,8 @@ from .. import autostart
 from ..db import floor_day
 from ..units import format_bytes, format_rate, format_when, truncate
 from . import theme
-from .widgets import BarChart, Card, Legend, ShareBarDelegate, SpeedGraph, StatTile
+from .widgets import (BarChart, Card, Legend, ShareBarDelegate, SpeedGraph,
+                      StatTile, WanIpChip)
 
 PERIODS = [
     ("hour", "Hourly", "Last 24 hours"),
@@ -132,11 +133,21 @@ class Page(QWidget):
             sub = QLabel(hint)
             sub.setObjectName("PageHint")
             head.addWidget(sub)
-        outer.addLayout(head)
+
+        # Title on the left, room for extras on the right of the same row.
+        self.header_row = QHBoxLayout()
+        self.header_row.setSpacing(16)
+        self.header_row.addLayout(head)
+        self.header_row.addStretch(1)
+        outer.addLayout(self.header_row)
 
         self.content = QVBoxLayout()
         self.content.setSpacing(16)
         outer.addLayout(self.content, 1)
+
+    def add_header_widget(self, widget: QWidget) -> None:
+        """Place a widget at the right of the title row, vertically centred."""
+        self.header_row.addWidget(widget, 0, Qt.AlignVCenter)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +157,11 @@ class DashboardPage(Page):
     def __init__(self, db, engine, settings, parent=None) -> None:
         super().__init__("Dashboard", "Live throughput and totals for this machine.", parent)
         self.db, self.engine, self.settings = db, engine, settings
+
+        self.wan_chip = WanIpChip()
+        self.add_header_widget(self.wan_chip)
+        engine.wan.resolved.connect(self.wan_chip.set_address)
+        self.wan_chip.update_from(engine.wan, settings.get("show_wan_ip", True))
 
         tiles = QHBoxLayout()
         tiles.setSpacing(14)
@@ -204,6 +220,8 @@ class DashboardPage(Page):
 
     def refresh(self) -> None:
         unit = self.settings.get("units", "auto")
+        self.wan_chip.update_from(self.engine.wan,
+                                  self.settings.get("show_wan_ip", True))
         for key, tile in self.tiles.items():
             d, u = self.db.totals_for_period(key)
             tile.set_values(d, u, unit)
@@ -536,6 +554,20 @@ class SettingsPage(Page):
         self.history_check.toggled.connect(
             lambda v: settings.set("read_browser_history", v))
         collection.add(self.history_check)
+
+        self.wan_check = QCheckBox("Show my public (WAN) IP on the dashboard")
+        self.wan_check.setChecked(settings.get("show_wan_ip", True))
+        self.wan_check.toggled.connect(engine.enable_wan_ip)
+        collection.add(self.wan_check)
+
+        wan_note = QLabel(
+            "Finding this needs one small request to an outside service "
+            "(ipify.org and similar) at start-up and every 15 minutes. "
+            "Nothing but the request itself is sent.")
+        wan_note.setObjectName("CardHint")
+        wan_note.setWordWrap(True)
+        wan_note.setContentsMargins(26, 0, 0, 4)
+        collection.add(wan_note)
 
         min_row = QHBoxLayout()
         min_row.addWidget(QLabel("Ignore files smaller than"))

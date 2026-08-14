@@ -8,7 +8,7 @@ series are on screen, and a hover layer on every plotted mark.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSizePolicy,
                                QStyledItemDelegate, QToolTip, QVBoxLayout,
@@ -86,6 +86,77 @@ class Legend(QWidget):
     def set_value(self, label: str, text: str) -> None:
         if label in self._values:
             self._values[label].setText(text)
+
+
+class WanIpChip(QFrame):
+    """The public IP address, sat beside a page title. Click to copy."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Chip")
+        self.setCursor(Qt.PointingHandCursor)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(13, 7, 13, 7)
+        row.setSpacing(10)
+
+        caption = QLabel("WAN IP")
+        caption.setObjectName("ChipLabel")
+        self.value = QLabel("checking…")
+        self.value.setObjectName("ChipValue")
+        row.addWidget(caption)
+        row.addWidget(self.value)
+
+        self._address = ""
+        self._restore = QTimer(self)
+        self._restore.setSingleShot(True)
+        self._restore.timeout.connect(self._show_address)
+        self.setToolTip("Your public IP address")
+
+    def set_address(self, address: str, source: str = "") -> None:
+        self._address = address
+        self._show_address()
+        if address:
+            self.setToolTip(
+                f"Your public IP address, according to {source or 'an external service'}.\n"
+                "Click to copy.")
+        else:
+            self.setToolTip(
+                "Could not reach any of the address-lookup services.\n"
+                "This is normal if you are offline.")
+
+    def set_disabled_note(self) -> None:
+        self._address = ""
+        self.value.setText("off")
+        self.value.setStyleSheet(f"color:{theme.MUTED};")
+        self.setToolTip("Public IP lookup is switched off in Settings.")
+
+    def update_from(self, resolver, enabled: bool) -> None:
+        """Reflect the resolver's current state, including 'not asked yet'."""
+        if not enabled:
+            self.set_disabled_note()
+        elif resolver.address:
+            self.set_address(resolver.address, resolver.source)
+        elif resolver.checked_at:
+            self.set_address("", "")          # asked, and nothing answered
+        else:
+            self._address = ""
+            self.value.setText("checking…")
+            self.value.setStyleSheet(f"color:{theme.MUTED};")
+            self.setToolTip("Looking up your public IP address…")
+
+    def _show_address(self) -> None:
+        self.value.setText(self._address or "unavailable")
+        self.value.setStyleSheet(
+            "" if self._address else f"color:{theme.MUTED};")
+
+    def mousePressEvent(self, event) -> None:
+        if self._address:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(self._address)
+            self.value.setText("copied")
+            self.value.setStyleSheet(f"color:{theme.GOOD};")
+            self._restore.start(1200)
+        super().mousePressEvent(event)
 
 
 class StatTile(QFrame):

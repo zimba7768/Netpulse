@@ -114,12 +114,18 @@ def main() -> int:
     db = Database(db_path())
     seed(db)
 
+    now_stamp = time.time()
     engine = Engine(db, settings)
     # The demo data includes per-application figures, so present the collector
     # as healthy — otherwise the Applications page shows its "unavailable"
     # banner, which is misleading in a screenshot.
     engine.etw.available = True
     engine.etw.events_seen = 1
+    # A documentation-range address (RFC 5737), never a real one — these
+    # images end up in the README.
+    engine.wan.address = "203.0.113.42"
+    engine.wan.source = "ipify.org"
+    engine.wan.checked_at = now_stamp
 
     # Synthetic live trace so the speed graph has something to draw.
     random.seed(3)

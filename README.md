@@ -29,8 +29,10 @@
   when it arrived, and where it came from.
 - **Live throughput** — a two-minute rolling graph, plus a tray icon whose
   arrows brighten with activity.
+- **Your public IP** — shown beside the dashboard title, click to copy.
 - **Local and private** — one SQLite file in `%APPDATA%\NetPulse`. No account,
-  no cloud, no telemetry, no network calls of its own.
+  no cloud, no telemetry. The *only* outbound request it ever makes is the
+  public-IP lookup, and that can be switched off in Settings.
 
 ## Screenshots
 
@@ -124,6 +126,18 @@ Two sources that reinforce each other:
   all profiles) supplies what folder watching can't know: the **source URL**.
   Records are matched back by path, and downloads that landed outside a watched
   folder are added from here too.
+
+### Public IP — an outside lookup
+
+Your router knows its WAN address but there is no vendor-neutral way to ask it,
+so NetPulse does what every other tool does: asks an external service what
+address the request appeared to come from. It tries ipify.org and a few
+alternatives in turn, once at start-up and then every 15 minutes.
+
+That is a small outbound request from an application built to watch outbound
+requests, so it is worth stating plainly: it sends nothing but the request
+itself, the response is validated as an address before being displayed, and the
+whole feature has an off switch in Settings.
 
 ## What it deliberately doesn't do
 
