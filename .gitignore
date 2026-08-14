@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# NetPulse local state — machine specific, never commit
+python-path.txt
+*.db
+*.db-wal
+*.db-shm
+settings.json
+netpulse-export.csv
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

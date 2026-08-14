@@ -1,0 +1,8 @@
+PySide6>=6.5
+psutil>=5.9
+watchdog>=3.0
+
+# Per-application attribution additionally needs "pywintrace" (Windows only).
+# It is installed separately by install.bat because it is optional: if it is
+# missing, NetPulse still records machine-wide totals and the file log.
+#   pip install pywintrace

@@ -1,0 +1,12 @@
+# Normalise text to LF in the repository, check out LF by default.
+* text=auto eol=lf
+
+# ...except the Windows scripts. cmd.exe and PowerShell want CRLF; an LF-only
+# batch file with labels and GOTO can misbehave.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.ico binary
+*.db binary
