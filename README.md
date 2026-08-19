@@ -143,6 +143,12 @@ first answer can still be the old address. A slow periodic check every 15
 minutes remains as a backstop for changes with no local cause, such as an ISP
 lease renewal.
 
+Five providers are tried in turn, and whichever answered last is tried first
+next time — ad-blocking DNS, router filters and VPN "clean browsing" options
+block some of these by name, and remembering a working one avoids walking the
+list on every check. While attempts are still in progress the chip reads
+*retrying…* rather than *unavailable*, because those mean different things.
+
 That is a small outbound request from an application built to watch outbound
 requests, so it is worth stating plainly: it sends nothing but the request
 itself, the response is validated as an address before being displayed, and the

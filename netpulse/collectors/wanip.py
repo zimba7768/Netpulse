@@ -151,6 +151,8 @@ class WanIpResolver(QObject):
         #: trusted, as opposed to merely being unconfirmed.
         self.suspect = False
         self.last_error = ""
+        #: The provider that answered most recently, tried first next time.
+        self.preferred = ""
         self._announced = False
         self.fingerprint: tuple = ()
         self._due: list[float] = []
@@ -225,9 +227,19 @@ class WanIpResolver(QObject):
 
     # ----------------------------------------------------------------- fetch
     def lookup(self) -> tuple[str, str]:
-        """Try each provider until one gives a valid address."""
+        """Try each provider until one gives a valid address.
+
+        Whichever answered last is tried first. On a network that filters some
+        of these by name — ad-blocking DNS, a router filter, a VPN client's
+        "clean browsing" option — the blocked ones fail every time, and
+        starting from a known-good provider turns a slow walk through the list
+        into a single request.
+        """
         reasons: list[str] = []
-        for url, name in ENDPOINTS:
+        order = list(ENDPOINTS)
+        if self.preferred:
+            order.sort(key=lambda item: item[0] != self.preferred)
+        for url, name in order:
             if self._stop.is_set():
                 break
             try:
@@ -237,6 +249,7 @@ class WanIpResolver(QObject):
                 continue
             if address:
                 self.last_error = ""
+                self.preferred = url
                 return address, name
             reasons.append(f"{name}: unrecognised reply")
         # Kept so the interface can explain itself rather than just saying no.

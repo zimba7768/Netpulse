@@ -139,22 +139,43 @@ class WanIpChip(QFrame):
         self.value.setStyleSheet(f"color:{theme.MUTED};")
         self.setToolTip("Looking up your public IP address…")
 
+    #: Consecutive failures before "still trying" becomes "gave up". A VPN
+    #: coming up reliably costs a couple of attempts, so anything less reports
+    #: a problem that is about to resolve itself.
+    PATIENCE = 3
+
     def update_from(self, resolver, enabled: bool) -> None:
         """Reflect the resolver's current state, including 'not asked yet'."""
         if not enabled:
             self.set_disabled_note()
-        elif resolver.address:
+            return
+        if resolver.address:
             self.set_address(resolver.address, resolver.source)
-        elif resolver.checked_at:
-            self.set_address("", "")          # asked, and nothing answered
-            # Say what actually went wrong rather than leaving them guessing.
-            detail = getattr(resolver, "last_error", "")
-            when = time.strftime("%H:%M:%S", time.localtime(resolver.checked_at))
-            self.setToolTip(
-                f"No address-lookup service could be reached.\nLast tried {when}."
-                + (f"\n\n{detail}" if detail else ""))
-        else:
+            return
+        if not resolver.checked_at:
             self.set_checking()
+            return
+
+        detail = getattr(resolver, "last_error", "")
+        when = time.strftime("%H:%M:%S", time.localtime(resolver.checked_at))
+        failures = getattr(resolver, "failures", 0)
+
+        if 0 < failures < self.PATIENCE:
+            # Still working through the retry ladder. Saying "unavailable"
+            # here would be wrong: another attempt is already scheduled, and
+            # this is the normal state for a few seconds after a VPN connects.
+            self.set_checking()
+            self.value.setText("retrying…")
+            self.setToolTip(
+                f"No answer yet — attempt {failures} failed at {when}, "
+                "trying again shortly."
+                + (f"\n\n{detail}" if detail else ""))
+            return
+
+        self.set_address("", "")              # asked repeatedly, nothing answered
+        self.setToolTip(
+            f"No address-lookup service could be reached.\nLast tried {when}."
+            + (f"\n\n{detail}" if detail else ""))
 
     def _show_address(self) -> None:
         self.value.setText(self._address or "unavailable")

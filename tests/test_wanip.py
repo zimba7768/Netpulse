@@ -429,5 +429,51 @@ class EndpointConfigTests(unittest.TestCase):
         self.assertLessEqual(wanip.MAX_BYTES, 1024)
 
 
+class ProviderPreferenceTests(unittest.TestCase):
+    """On a network that blocks some providers by name, don't keep asking them.
+
+    Reported machine: DNS refuses ipify.org, checkip.amazonaws.com and
+    icanhazip.com, while ifconfig.me and ipinfo.io resolve normally.
+    """
+
+    def setUp(self) -> None:
+        self.real_fetch = wanip.fetch_text
+        self.calls: list[str] = []
+        blocked = {url for url, _ in wanip.ENDPOINTS[:3]}
+
+        def fake(url: str, timeout: float = 0) -> str:
+            self.calls.append(url)
+            if url in blocked:
+                raise OSError("getaddrinfo failed")
+            return "47.194.12.239"
+
+        wanip.fetch_text = fake
+
+    def tearDown(self) -> None:
+        wanip.fetch_text = self.real_fetch
+
+    def test_the_first_lookup_walks_the_list(self):
+        resolver = wanip.WanIpResolver()
+        self.assertEqual(resolver.lookup()[0], "47.194.12.239")
+        self.assertEqual(len(self.calls), 4, "three blocked, the fourth answers")
+
+    def test_later_lookups_go_straight_to_what_worked(self):
+        resolver = wanip.WanIpResolver()
+        resolver.lookup()
+        self.calls.clear()
+        self.assertEqual(resolver.lookup()[0], "47.194.12.239")
+        self.assertEqual(len(self.calls), 1,
+                         "the known-good provider should be asked first")
+
+    def test_it_falls_back_if_the_preferred_one_stops_working(self):
+        resolver = wanip.WanIpResolver()
+        resolver.lookup()
+        resolver.preferred = wanip.ENDPOINTS[0][0]      # pretend a blocked one
+        self.calls.clear()
+        self.assertEqual(resolver.lookup()[0], "47.194.12.239",
+                         "a stale preference must not break the lookup")
+        self.assertGreater(len(self.calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
