@@ -163,16 +163,20 @@ has been uploading?" without touching encrypted traffic.
 Off by default; turn it on in **Settings → Appearance and behaviour**. The line
 under the tick box always says which of two mechanisms is in use:
 
-- **Scheduled task** — used when NetPulse is elevated at the moment you tick the
-  box. Windows starts it elevated and silently at sign-in, so per-application
-  tracking works from the start. It lives in Task Scheduler and, importantly,
-  **does not appear in Task Manager's Startup tab**.
-- **Startup entry** — the fallback when NetPulse isn't elevated. Windows always
-  launches `Run` entries unelevated and cannot show a UAC prompt at sign-in, so
-  per-application tracking will be off.
+- **Scheduled task** — what it aims for. Windows starts NetPulse elevated and
+  silently at sign-in, so per-application tracking works from the start.
+  Registering the task is itself a privileged operation, so ticking the box
+  raises one administrator prompt; you do not need to restart NetPulse as
+  administrator first. It lives in Task Scheduler and, importantly, **does not
+  appear in Task Manager's Startup tab**.
+- **Startup entry** — the fallback if that prompt is declined or the task
+  cannot be created. Windows always launches `Run` entries unelevated and
+  cannot show a UAC prompt at sign-in, so per-application tracking will be off.
+  Untick and re-tick the box to try for the scheduled task again.
 
-So: start with `run-as-admin.bat`, then tick the box. If you already ticked it
-unelevated, start elevated and untick/re-tick — it upgrades itself.
+The task records an absolute path. If you move or re-clone NetPulse, the old
+task keeps starting the old copy — the line under the tick box says so when
+that happens, and re-ticking repoints it.
 
 ## Storage and retention
 

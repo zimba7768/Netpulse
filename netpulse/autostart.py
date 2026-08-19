@@ -14,8 +14,10 @@ one they ended up with.
 """
 from __future__ import annotations
 
+import base64
 import ctypes
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -160,6 +162,30 @@ def task_exists() -> bool:
     return code == 0
 
 
+def _elevated_schtasks(xml_path: Path) -> tuple[int, str]:
+    """Register the task through a single UAC prompt.
+
+    Creating a task that runs with highest privileges is itself a privileged
+    operation, so without this the only route was to restart the whole
+    application as administrator first — asking the user to think about
+    elevation twice for something they had already asked for once.
+
+    The script is passed base64-encoded rather than as a quoted string: it
+    contains both kinds of quote and a Windows path, and -EncodedCommand
+    removes every layer of quoting between Python, the Windows command line
+    and PowerShell that could otherwise mangle it.
+    """
+    script = (
+        "$xml = '" + str(xml_path).replace("'", "''") + "'; "
+        "$argument = '/Create /TN " + TASK_NAME + " /XML \"' + $xml + '\" /F'; "
+        "$p = Start-Process schtasks -ArgumentList $argument "
+        "-Verb RunAs -WindowStyle Hidden -Wait -PassThru; "
+        "exit $p.ExitCode"
+    )
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return _run(["powershell", "-NoProfile", "-EncodedCommand", encoded])
+
+
 def _create_task() -> tuple[bool, str]:
     path = Path(tempfile.gettempdir()) / "netpulse-task.xml"
     try:
@@ -167,13 +193,68 @@ def _create_task() -> tuple[bool, str]:
         path.write_text(_task_xml(), encoding="utf-16")
     except OSError as exc:
         return False, f"Could not write the task definition: {exc}"
-    code, output = _run(["schtasks", "/Create", "/TN", TASK_NAME,
-                         "/XML", str(path), "/F"])
+
+    if is_admin():
+        code, output = _run(["schtasks", "/Create", "/TN", TASK_NAME,
+                             "/XML", str(path), "/F"])
+    else:
+        code, output = _elevated_schtasks(path)
+        if code != 0 and not output.strip():
+            output = ("The administrator prompt was declined or dismissed.")
+
     try:
         path.unlink()
     except OSError:
         pass
     return code == 0, output.strip()
+
+
+def task_action() -> tuple[str, str]:
+    """What the registered task actually launches: (command, arguments).
+
+    Worth checking, because the task stores an absolute path. Move or re-clone
+    the application and the task keeps faithfully starting the old copy.
+    """
+    if not IS_WINDOWS:
+        return "", ""
+    try:
+        proc = subprocess.run(
+            ["schtasks", "/Query", "/TN", TASK_NAME, "/XML", "ONE"],
+            capture_output=True, creationflags=_NO_WINDOW, timeout=30)
+    except Exception:
+        return "", ""
+    if proc.returncode != 0:
+        return "", ""
+    raw = proc.stdout or b""
+    for encoding in ("utf-16", "utf-8"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        return "", ""
+    command = re.search(r"<Command>(.*?)</Command>", text, re.S)
+    arguments = re.search(r"<Arguments>(.*?)</Arguments>", text, re.S)
+    return (command.group(1).strip() if command else "",
+            arguments.group(1).strip() if arguments else "")
+
+
+def task_matches_this_copy() -> bool:
+    """False when the task points somewhere other than the running copy."""
+    command, arguments = task_action()
+    if not command:
+        return True                    # nothing registered, nothing stale
+    want_command, want_arguments, _ = launch_parts()
+
+    def normalise(value: str) -> str:
+        # Windows paths are case-insensitive, but os.path.normcase only folds
+        # case *on* Windows — spelling it out keeps the comparison honest
+        # wherever the tests happen to run.
+        return os.path.normcase(value).replace("/", "\\").strip().lower()
+
+    return (normalise(command) == normalise(want_command)
+            and normalise(arguments) == normalise(want_arguments))
 
 
 def _delete_task() -> None:
@@ -228,21 +309,21 @@ def describe() -> str:
     """One line for the Settings page describing what will happen at sign-in."""
     mode = current_mode()
     if mode == MODE_TASK:
+        if not task_matches_this_copy():
+            command, _ = task_action()
+            return ("On, but pointing at a different copy of NetPulse "
+                    f"({command or 'unknown location'}). That is the one Windows "
+                    "will start. Untick and re-tick this box to point it at "
+                    "this copy instead.")
         return ("On, as a scheduled task — starts elevated at sign-in, so "
-                "per-application tracking works from the start. Note this is "
-                "listed in Task Scheduler, not in Task Manager's Startup tab.")
+                "per-application tracking works from the start. Listed in Task "
+                "Scheduler, not in Task Manager's Startup tab.")
     if mode == MODE_RUN:
-        where = ("Listed in Task Manager › Startup apps, where it may appear "
-                 "as ‘pythonw.exe’ rather than NetPulse.")
-        if is_admin():
-            return ("On, as a startup entry — it will start without administrator "
-                    "rights, so per-application tracking will be off. Untick and "
-                    "re-tick this box now to upgrade it to a scheduled task. "
-                    + where)
-        return ("On, as a startup entry — it will start without administrator "
-                "rights, so per-application tracking will be off. To fix that, "
-                "start NetPulse with run-as-admin.bat and re-tick this box. "
-                + where)
+        return ("On, as a startup entry — Windows always launches these without "
+                "administrator rights, so per-application tracking will be off. "
+                "Untick and re-tick this box to switch to a scheduled task, "
+                "which can start elevated. Listed in Task Manager › Startup "
+                "apps, where it may appear as ‘pythonw.exe’.")
     return "Off — NetPulse will not start automatically."
 
 
@@ -258,28 +339,26 @@ def set_enabled(enabled: bool) -> tuple[bool, str]:
             return False, f"Could not remove the startup entry: {err}"
         return True, "NetPulse will no longer start automatically."
 
-    # Prefer the scheduled task; it is the only way to start elevated silently.
-    if is_admin():
-        ok, output = _create_task()
-        if ok:
-            _set_run_key(False)          # never leave both in place
-            return True, ("Done. NetPulse will start automatically at sign-in, "
-                          "with per-application tracking enabled.")
-        fallback_note = (f"\n\n(The scheduled task could not be created: "
-                         f"{output or 'unknown error'} — a normal startup entry "
-                         f"was used instead.)")
-    else:
-        fallback_note = ("\n\nIt will start without administrator rights, so the "
-                         "per-application breakdown will be off until you open "
-                         "NetPulse with run-as-admin.bat. To fix that "
-                         "permanently: start NetPulse as administrator, then "
-                         "untick and re-tick this box — it will switch to a "
-                         "scheduled task that starts elevated on its own.")
+    # Always aim for the scheduled task: it is the only mechanism that can
+    # start elevated at sign-in, and it can now be registered from an ordinary
+    # session by way of one administrator prompt.
+    ok, output = _create_task()
+    if ok:
+        _set_run_key(False)              # never leave both in place
+        return True, ("Done. NetPulse will start automatically when you sign "
+                      "in, with administrator rights, so the per-application "
+                      "breakdown works from the start.")
 
     ok, err = _set_run_key(True)
     if not ok:
-        return False, f"Could not create the startup entry: {err}"
-    return True, "NetPulse will start automatically at sign-in." + fallback_note
+        return False, f"Could not set NetPulse to start automatically: {err}"
+    return True, (
+        "NetPulse will start automatically when you sign in — but without "
+        "administrator rights, so the per-application breakdown will be off "
+        "until you open it with run-as-admin.bat.\n\n"
+        "The scheduled task that would have started it elevated could not be "
+        f"created: {output or 'unknown error'}\n\n"
+        "Untick and re-tick this box to try again.")
 
 
 def elevated_relaunch() -> bool:

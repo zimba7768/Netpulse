@@ -127,5 +127,66 @@ class LaunchCommandTests(unittest.TestCase):
         self.assertIn("Windows", message)
 
 
+class StaleTaskTests(unittest.TestCase):
+    """A registered task stores an absolute path, so moving the app strands it.
+
+    This bit the author of the reported issue: the repository was re-cloned to
+    a new folder, leaving the task pointing at the old copy, which is the one
+    Windows would faithfully keep starting.
+    """
+
+    def setUp(self) -> None:
+        self.real_action = autostart.task_action
+
+    def tearDown(self) -> None:
+        autostart.task_action = self.real_action
+
+    def test_matches_when_the_task_points_at_this_copy(self):
+        command, arguments, _ = autostart.launch_parts()
+        autostart.task_action = lambda: (command, arguments)
+        self.assertTrue(autostart.task_matches_this_copy())
+
+    def test_case_differences_are_not_treated_as_a_mismatch(self):
+        command, arguments, _ = autostart.launch_parts()
+        autostart.task_action = lambda: (command.upper(), arguments.upper())
+        self.assertTrue(autostart.task_matches_this_copy(),
+                        "Windows paths are case-insensitive")
+
+    def test_detects_a_task_left_behind_by_a_moved_installation(self):
+        autostart.task_action = lambda: (
+            r"C:\Users\zimba\Downloads\netpulse-github\netpulse\pythonw.exe",
+            r'"C:\Users\zimba\Downloads\netpulse-github\netpulse\main.py" --tray')
+        self.assertFalse(autostart.task_matches_this_copy())
+
+    def test_no_task_is_not_a_mismatch(self):
+        autostart.task_action = lambda: ("", "")
+        self.assertTrue(autostart.task_matches_this_copy())
+
+
+class ElevationTests(unittest.TestCase):
+    def test_the_elevated_command_survives_a_path_with_spaces(self):
+        """Every quoting layer between Python, cmd and PowerShell is bypassed."""
+        import base64
+        from pathlib import Path as P
+
+        captured = {}
+
+        real_run = autostart._run
+        autostart._run = lambda args: (captured.update(args=args), (0, ""))[1]
+        try:
+            autostart._elevated_schtasks(P(r"C:\Program Files\net pulse\task.xml"))
+        finally:
+            autostart._run = real_run
+
+        args = captured["args"]
+        self.assertEqual(args[:3], ["powershell", "-NoProfile", "-EncodedCommand"])
+        script = base64.b64decode(args[3]).decode("utf-16-le")
+        self.assertIn(r"C:\Program Files\net pulse\task.xml", script)
+        self.assertIn("-Verb RunAs", script, "must raise the UAC prompt")
+        self.assertIn("-Wait", script, "must wait, or the result is unknowable")
+        self.assertIn("exit $p.ExitCode", script,
+                      "a declined prompt has to be distinguishable from success")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

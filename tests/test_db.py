@@ -56,6 +56,33 @@ class DatabaseTests(unittest.TestCase):
         down, up = self.db.totals(day, day + 86400, "chrome.exe", DAY)
         self.assertEqual((down, up), (800, 400))
 
+    def test_rollup_covers_a_gap_left_by_sleep_or_a_stopped_process(self):
+        """The incremental rollup must not lose samples older than its window.
+
+        If the machine sleeps for hours, the minute rows written just before it
+        went under are older than the fixed look-back by the time the next
+        rollup runs. Anything not folded into the hour and day buckets by then
+        would disappear from every total built on them.
+        """
+        long_ago = time.time() - 9 * 3600
+        self.db.add_traffic(5_000_000, 500_000, ts=long_ago)
+        # Pretend a rollup last completed just after that sample was written.
+        self.db.set_meta("last_rollup", str(int(long_ago) + 30))
+
+        self.db.rollup()                       # the ordinary periodic call
+
+        day = floor_day(long_ago)
+        self.assertEqual(self.db.totals(day, day + 86400, SYSTEM, DAY),
+                         (5_000_000, 500_000),
+                         "traffic from before the look-back window was lost")
+
+    def test_rollup_records_its_own_high_water_mark(self):
+        self.assertIsNone(self.db.get_meta("last_rollup"))
+        self.db.rollup()
+        stamp = self.db.get_meta("last_rollup")
+        self.assertIsNotNone(stamp)
+        self.assertAlmostEqual(float(stamp), time.time(), delta=30)
+
     def test_rollup_is_idempotent(self):
         base = floor_hour(time.time())
         self.db.add_traffic(500, 250, ts=base + 30)

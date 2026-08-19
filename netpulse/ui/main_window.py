@@ -1,6 +1,8 @@
 """The main window: sidebar navigation, pages, and the periodic refresh clock."""
 from __future__ import annotations
 
+from datetime import date
+
 from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel,
@@ -28,6 +30,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.db, self.engine, self.settings = db, engine, settings
         self._quitting = False
+        self._rendered_day = date.today()
 
         self.setObjectName("Root")
         self.setWindowTitle("NetPulse — Network Usage Monitor")
@@ -151,6 +154,17 @@ class MainWindow(QWidget):
             self.dashboard.refresh_live()
 
     def refresh_current(self) -> None:
+        # Every "this hour / today / this week" figure is relative to the
+        # current date, so when the date rolls over each page is stale by
+        # definition — including ones that are not on screen. Refresh the lot
+        # once, rather than trusting that whichever page happens to be visible
+        # will notice.
+        today = date.today()
+        if today != self._rendered_day:
+            self._rendered_day = today
+            self.refresh_all()
+            return
+
         if not self.isVisible():
             return
         page = self.stack.currentWidget()

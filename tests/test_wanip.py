@@ -15,6 +15,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PySide6.QtCore import Qt
+
 from netpulse.collectors import wanip
 
 
@@ -123,17 +125,21 @@ class _FakeAddr:
 class _FakePsutil:
     """Stands in for psutil so adapter changes can be simulated."""
 
-    def __init__(self, layout: dict[str, list[str]]) -> None:
+    def __init__(self, layout: dict[str, list[str]],
+                 down: dict[str, list[str]] | None = None) -> None:
         self.layout = layout
+        self.down = down or {}
 
     def net_if_addrs(self):
+        merged = {**self.layout, **self.down}
         return {
             name: [_FakeAddr(socket.AF_INET, ip) for ip in ips]
-            for name, ips in self.layout.items()
+            for name, ips in merged.items()
         }
 
     def net_if_stats(self):
-        return {name: _FakeStat(True) for name in self.layout}
+        return ({name: _FakeStat(True) for name in self.layout}
+                | {name: _FakeStat(False) for name in self.down})
 
 
 HOME = {"Wi-Fi": ["192.168.1.20"], "Loopback": ["127.0.0.1"]}
@@ -170,7 +176,45 @@ class FingerprintTests(unittest.TestCase):
         wanip.psutil = _FakePsutil({"Wi-Fi": ["192.168.1.20"]})
         without = wanip.network_fingerprint()
         wanip.psutil = _FakePsutil({"Wi-Fi": ["192.168.1.20", "127.0.0.1"]})
-        self.assertEqual(without[0][2], wanip.network_fingerprint()[0][2])
+        self.assertEqual(without, wanip.network_fingerprint())
+
+    def test_ignores_adapters_that_are_down(self):
+        """A real machine has several, and they are not part of the picture."""
+        wanip.psutil = _FakePsutil({"Ethernet": ["192.168.50.10"]})
+        just_ethernet = wanip.network_fingerprint()
+        wanip.psutil = _FakePsutil(
+            {"Ethernet": ["192.168.50.10"]},
+            down={"Wi-Fi 2": ["169.254.128.239"], "Wi-Fi 3": ["169.254.202.70"]})
+        self.assertEqual(just_ethernet, wanip.network_fingerprint())
+
+    def test_ignores_apipa_addresses(self):
+        """169.254.x.x means DHCP failed; Windows reissues them on a whim.
+
+        A machine with several disconnected virtual adapters would otherwise
+        look like it changed network every time one renumbered itself.
+        """
+        wanip.psutil = _FakePsutil({"Ethernet": ["192.168.50.10"]})
+        clean = wanip.network_fingerprint()
+        wanip.psutil = _FakePsutil(
+            {"Ethernet": ["192.168.50.10"], "Bluetooth": ["169.254.180.227"]})
+        self.assertEqual(clean, wanip.network_fingerprint())
+
+    def test_a_real_windows_layout_is_stable_while_the_vpn_holds(self):
+        """Modelled on a reported machine: Surfshark up, six adapters down."""
+        layout = {"Ethernet": ["192.168.50.10"], "SurfsharkWireGuard": ["10.14.0.2"]}
+        down_first = {"Bluetooth Network Connection": ["169.254.180.227"],
+                      "OpenVPN Data Channel Offload for Surfshark": ["169.254.202.209"],
+                      "Wi-Fi": ["169.254.112.158"], "Wi-Fi 2": ["169.254.128.239"]}
+        down_later = {"Bluetooth Network Connection": ["169.254.9.11"],
+                      "OpenVPN Data Channel Offload for Surfshark": ["169.254.77.4"],
+                      "Wi-Fi": ["169.254.31.200"], "Wi-Fi 2": ["169.254.55.9"]}
+        wanip.psutil = _FakePsutil(layout, down=down_first)
+        before = wanip.network_fingerprint()
+        wanip.psutil = _FakePsutil(layout, down=down_later)
+        self.assertEqual(before, wanip.network_fingerprint(),
+                         "disconnected adapters renumbering must not read as "
+                         "a network change — it would restart the lookup "
+                         "ladder over and over")
 
     def test_survives_psutil_being_unavailable(self):
         wanip.psutil = None
@@ -266,6 +310,111 @@ class VpnSwitchTests(unittest.TestCase):
                              f"expected a single lookup, got {len(calls)}")
         finally:
             resolver.stop()
+
+
+class FailureRecoveryTests(unittest.TestCase):
+    """Reported: with a VPN on, the address went blank and stayed blank.
+
+    A failed lookup used to drop straight back to the 15-minute cycle, so one
+    bad moment — a tunnel still connecting, a second offline — blanked the
+    display for a quarter of an hour.
+    """
+
+    def setUp(self) -> None:
+        self.real_fetch = wanip.fetch_text
+        self.real_backoff = wanip.RETRY_BACKOFF
+        self.answer: object = "93.184.216.34"
+        wanip.fetch_text = self._fetch
+
+    def tearDown(self) -> None:
+        wanip.fetch_text = self.real_fetch
+        wanip.RETRY_BACKOFF = self.real_backoff
+
+    def _fetch(self, url: str, timeout: float = 0) -> str:
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return str(self.answer)
+
+    def test_a_failure_retries_soon_not_in_fifteen_minutes(self):
+        resolver = wanip.WanIpResolver(interval=900)
+        resolver.check()
+        self.assertEqual(resolver.next_delay(), 900, "healthy: the slow cycle")
+
+        self.answer = OSError("no route to host")
+        resolver.check()
+        self.assertEqual(resolver.next_delay(), wanip.RETRY_BACKOFF[0])
+        self.assertLess(resolver.next_delay(), 60,
+                        "a failure must be retried within the minute")
+
+    def test_backoff_grows_then_settles(self):
+        resolver = wanip.WanIpResolver(interval=900)
+        self.answer = OSError("down")
+        delays = []
+        for _ in range(len(wanip.RETRY_BACKOFF) + 2):
+            resolver.check()
+            delays.append(resolver.next_delay())
+        self.assertEqual(delays[:len(wanip.RETRY_BACKOFF)], list(wanip.RETRY_BACKOFF))
+        self.assertEqual(delays[-1], wanip.RETRY_BACKOFF[-1], "caps, never grows without limit")
+        self.assertEqual(sorted(delays), delays, "backoff must not go backwards")
+
+    def test_recovers_to_the_slow_cycle_after_a_success(self):
+        resolver = wanip.WanIpResolver(interval=900)
+        self.answer = OSError("down")
+        resolver.check()
+        resolver.check()
+        self.assertNotEqual(resolver.next_delay(), 900)
+        self.answer = "93.184.216.34"
+        resolver.check()
+        self.assertEqual(resolver.failures, 0)
+        self.assertEqual(resolver.next_delay(), 900)
+
+    def test_a_transient_failure_keeps_the_last_address_on_screen(self):
+        """Nothing suggests the address changed, so do not blank it."""
+        resolver = wanip.WanIpResolver()
+        resolver.check()
+        self.assertEqual(resolver.address, "93.184.216.34")
+        self.answer = TimeoutError("slow")
+        resolver.check()
+        self.assertEqual(resolver.address, "93.184.216.34",
+                         "a blip must not wipe a known-good address")
+
+    def test_a_failure_after_a_network_change_does_blank_it(self):
+        """Here the old address really is suspect, so showing it would lie.
+
+        One failure is not enough: a tunnel coming up drops a request or two,
+        and blanking on the first would flicker for no reason.
+        """
+        resolver = wanip.WanIpResolver()
+        resolver.check()
+        resolver.suspect = True                # as the loop sets on adapter change
+        self.answer = OSError("tunnel not up yet")
+
+        resolver.check()
+        self.assertEqual(resolver.address, "93.184.216.34",
+                         "one failure mid-reconnect should not blank it")
+        resolver.check()
+        self.assertEqual(resolver.address, "",
+                         "after a network change an unconfirmed address is wrong")
+
+    def test_the_reason_for_failure_is_recorded(self):
+        """So the interface can explain itself instead of just saying no."""
+        resolver = wanip.WanIpResolver()
+        self.answer = OSError("blocked")
+        resolver.check()
+        self.assertIn("OSError", resolver.last_error)
+        self.answer = "93.184.216.34"
+        resolver.check()
+        self.assertEqual(resolver.last_error, "", "cleared once it works again")
+
+    def test_the_interface_is_told_even_when_the_first_lookup_fails(self):
+        """Otherwise the chip sits on 'checking…' for ever."""
+        emitted = []
+        resolver = wanip.WanIpResolver()
+        resolver.resolved.connect(lambda a, s: emitted.append((a, s)),
+                                  Qt.DirectConnection)
+        self.answer = OSError("offline")
+        resolver.check()
+        self.assertEqual(emitted, [("", "")])
 
 
 class EndpointConfigTests(unittest.TestCase):

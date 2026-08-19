@@ -8,6 +8,8 @@ series are on screen, and a hover layer on every plotted mark.
 """
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSizePolicy,
@@ -145,6 +147,12 @@ class WanIpChip(QFrame):
             self.set_address(resolver.address, resolver.source)
         elif resolver.checked_at:
             self.set_address("", "")          # asked, and nothing answered
+            # Say what actually went wrong rather than leaving them guessing.
+            detail = getattr(resolver, "last_error", "")
+            when = time.strftime("%H:%M:%S", time.localtime(resolver.checked_at))
+            self.setToolTip(
+                f"No address-lookup service could be reached.\nLast tried {when}."
+                + (f"\n\n{detail}" if detail else ""))
         else:
             self.set_checking()
 

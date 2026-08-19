@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import autostart
+from ..config import APP_VERSION
 from ..db import floor_day
 from ..units import format_bytes, format_rate, format_when, truncate
 from . import theme
@@ -700,8 +701,9 @@ class SettingsPage(Page):
         body.addWidget(data_card)
 
         about = QLabel(
-            "NetPulse · totals come from the Windows adapter counters; "
-            "per-application figures come from the kernel network trace.")
+            f"NetPulse {APP_VERSION} · totals come from the Windows adapter "
+            "counters; per-application figures come from the kernel network "
+            "trace.")
         about.setObjectName("CardHint")
         about.setWordWrap(True)
         body.addWidget(about)

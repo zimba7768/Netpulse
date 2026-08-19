@@ -181,12 +181,20 @@ class Database:
     def rollup(self, since: float | None = None) -> None:
         """Rebuild hour buckets from minutes and day buckets from hours.
 
-        Only buckets newer than ``since`` (default: the last 3 hours) are
-        recomputed, which keeps the periodic call cheap.  Pass ``since=0`` for a
-        full rebuild.
+        Only buckets newer than ``since`` are recomputed, which keeps the
+        periodic call cheap.  Pass ``since=0`` for a full rebuild.
+
+        The default covers the last three hours *or* everything since the last
+        successful rollup, whichever reaches further back.  A fixed window alone
+        is not safe: if the machine sleeps, or the process is stopped for a
+        while, samples older than the window would never be folded into the
+        hour and day totals and would silently vanish from every view built on
+        them.
         """
         if since is None:
-            since = time.time() - 3 * 3600
+            recent = time.time() - 3 * 3600
+            last = float(self.get_meta("last_rollup") or 0)
+            since = min(recent, last - 120) if last else 0
         hour_from = floor_hour(since) if since else 0
         day_from = floor_day(since) if since else 0
 
@@ -226,6 +234,9 @@ class Database:
                     [(DAY, ts, app, d, u) for (ts, app), (d, u) in days.items()],
                 )
             self._conn.commit()
+        # Only recorded after the write succeeds, so a failure mid-way means the
+        # next run covers the same ground again rather than skipping it.
+        self.set_meta("last_rollup", str(int(time.time())))
 
     def prune(self, minute_days: int = 7, hour_days: int = 90, day_days: int = 0) -> int:
         """Drop detail older than the retention windows. 0 = keep forever."""
