@@ -9,7 +9,8 @@ from PySide6.QtCore import QObject, Signal
 
 from .collectors.files import FileTracker
 from .collectors.net_etw import EtwNetCollector
-from .collectors.net_system import SystemNetCollector
+from .collectors.net_system import (DIRECT, VPN, SystemNetCollector,
+                                    vpn_active)
 from .collectors.wanip import WanIpResolver
 
 LIVE_WINDOW_SECONDS = 120
@@ -33,9 +34,12 @@ class Engine(QObject):
         self.settings = settings
         self.system = SystemNetCollector()
         self.etw = EtwNetCollector()
-        self.files = FileTracker(db, settings, on_new=self._on_file)
+        self.files = FileTracker(db, settings, on_new=self._on_file,
+                                 link_of=self.current_link)
         self.wan = WanIpResolver()
-        self.live: deque[tuple[float, float, float]] = deque(maxlen=LIVE_WINDOW_SECONDS)
+        #: (timestamp, direct down, direct up, vpn down, vpn up) in bytes/sec
+        self.live: deque[tuple[float, float, float, float, float]] = deque(
+            maxlen=LIVE_WINDOW_SECONDS)
         self.session_down = 0
         self.session_up = 0
         self.started_at = time.time()
@@ -150,23 +154,32 @@ class Engine(QObject):
                 except Exception:
                     pass
 
+    def current_link(self) -> str:
+        """Which side new activity belongs to right now."""
+        return VPN if vpn_active() else DIRECT
+
     def _sample_once(self) -> None:
         if self.settings.get("paused"):
             self.system.sample()          # keep the baseline current, discard the value
             self.etw.drain()
-            self.live.append((time.time(), 0.0, 0.0))
+            self.live.append((time.time(), 0.0, 0.0, 0.0, 0.0))
             self.tick.emit(0.0, 0.0)
             return
 
-        down, up = self.system.sample()
-        rate_down, rate_up = self.system.last_rate
+        totals = self.system.sample()
+        rates = self.system.last_rates
         per_app = self.etw.drain() if self.etw.available else {}
 
-        self.session_down += down
-        self.session_up += up
-        self.live.append((time.time(), rate_down, rate_up))
-        if down or up or per_app:
-            self.db.add_traffic(down, up, per_app)
+        moved = sum(d + u for d, u in totals.values())
+        self.session_down += sum(d for d, _ in totals.values())
+        self.session_up += sum(u for _, u in totals.values())
+        self.live.append((time.time(),
+                          rates[DIRECT][0], rates[DIRECT][1],
+                          rates[VPN][0], rates[VPN][1]))
+        if moved or per_app:
+            self.db.add_samples(totals, per_app)
+
+        rate_down, rate_up = self.system.last_rate
         self.tick.emit(rate_down, rate_up)
 
     # ------------------------------------------------------------------ files
@@ -174,10 +187,22 @@ class Engine(QObject):
         self.file_found.emit(record)
 
     # ---------------------------------------------------------------- helpers
-    def live_series(self) -> tuple[list[float], list[float], list[float]]:
+    def live_series(self, link: str | None = None
+                    ) -> tuple[list[float], list[float], list[float]]:
+        """Recent rates as (offsets, download, upload).
+
+        ``link`` selects one side; None combines them, which is what the tray
+        icon and the sidebar want.
+        """
         snapshot = list(self.live)
         if not snapshot:
             return [], [], []
         now = time.time()
-        xs = [t - now for t, _, _ in snapshot]
-        return xs, [d for _, d, _ in snapshot], [u for _, _, u in snapshot]
+        xs = [row[0] - now for row in snapshot]
+        if link == DIRECT:
+            return xs, [r[1] for r in snapshot], [r[2] for r in snapshot]
+        if link == VPN:
+            return xs, [r[3] for r in snapshot], [r[4] for r in snapshot]
+        return (xs,
+                [r[1] + r[3] for r in snapshot],
+                [r[2] + r[4] for r in snapshot])

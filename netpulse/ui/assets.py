@@ -168,6 +168,22 @@ def nav_icon(kind: str, color: str, size: int = 18) -> QIcon:
         corner.lineTo(s * 0.86 - fold, fold)
         corner.closeSubpath()
         p.fillPath(corner, QColor(theme.SIDEBAR))
+    elif kind == "vpn":
+        # A shield: the plainest visual shorthand for a protected connection.
+        shield = QPainterPath()
+        shield.moveTo(s * 0.5, s * 0.02)
+        shield.lineTo(s * 0.92, s * 0.20)
+        shield.lineTo(s * 0.92, s * 0.52)
+        shield.quadTo(s * 0.92, s * 0.86, s * 0.5, s * 0.98)
+        shield.quadTo(s * 0.08, s * 0.86, s * 0.08, s * 0.52)
+        shield.lineTo(s * 0.08, s * 0.20)
+        shield.closeSubpath()
+        p.fillPath(shield, c)
+        # A keyhole punched out, so it reads as a shield rather than a blob.
+        p.setBrush(QColor(theme.SIDEBAR))
+        p.drawEllipse(QPointF(s * 0.5, s * 0.44), s * 0.11, s * 0.11)
+        p.drawRoundedRect(QRectF(s * 0.43, s * 0.44, s * 0.14, s * 0.26),
+                          s * 0.05, s * 0.05)
     elif kind == "settings":
         cx = cy = s / 2
         body = s * 0.33          # radius of the gear body

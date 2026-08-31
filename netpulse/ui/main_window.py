@@ -13,7 +13,7 @@ from ..units import format_rate
 from . import theme
 from .assets import nav_icon
 from .pages import (AppsPage, DashboardPage, FilesPage, HistoryPage,
-                    SettingsPage)
+                    SettingsPage, VpnPage)
 from .tray import Tray, app_icon
 
 NAV = [
@@ -21,6 +21,7 @@ NAV = [
     ("History", "history"),
     ("Applications", "applications"),
     ("Files", "files"),
+    ("VPN", "vpn"),
     ("Settings", "settings"),
 ]
 
@@ -48,9 +49,10 @@ class MainWindow(QWidget):
         self.history = HistoryPage(db, settings)
         self.apps = AppsPage(db, engine, settings)
         self.files = FilesPage(db, engine, settings)
+        self.vpn = VpnPage(db, engine, settings)
         self.settings_page = SettingsPage(db, engine, settings)
         for page in (self.dashboard, self.history, self.apps,
-                     self.files, self.settings_page):
+                     self.files, self.vpn, self.settings_page):
             self.stack.addWidget(page)
         root.addWidget(self.stack, 1)
 
@@ -150,8 +152,11 @@ class MainWindow(QWidget):
         self.tray.update_rates(down, up, unit)
 
     def _refresh_live(self) -> None:
-        if self.stack.currentWidget() is self.dashboard and self.isVisible():
-            self.dashboard.refresh_live()
+        if not self.isVisible():
+            return
+        page = self.stack.currentWidget()
+        if hasattr(page, "refresh_live"):
+            page.refresh_live()
 
     def refresh_current(self) -> None:
         # Every "this hour / today / this week" figure is relative to the
@@ -173,7 +178,7 @@ class MainWindow(QWidget):
 
     def refresh_all(self) -> None:
         for page in (self.dashboard, self.history, self.apps,
-                     self.files, self.settings_page):
+                     self.files, self.vpn, self.settings_page):
             try:
                 page.refresh()
             except Exception:
@@ -181,7 +186,7 @@ class MainWindow(QWidget):
         self.status_label.setText(self.engine.status_text())
 
     def _on_file_found(self, record: dict) -> None:
-        if self.stack.currentWidget() in (self.files, self.dashboard):
+        if self.stack.currentWidget() in (self.files, self.dashboard, self.vpn):
             self.refresh_current()
 
     # ------------------------------------------------------------- lifecycle

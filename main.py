@@ -78,8 +78,11 @@ def main() -> int:
         icon_file = Path(sys.executable).resolve().parent / "netpulse.ico"
     else:
         icon_file = Path(__file__).resolve().parent / "netpulse.ico"
-    written = write_ico(icon_file)
-    if "--write-ico" in sys.argv:
+    # Only write when it is missing, or when asked for explicitly: rewriting
+    # it on every launch left the source checkout permanently "modified".
+    force = "--write-ico" in sys.argv
+    written = write_ico(icon_file) if force or not icon_file.exists() else icon_file
+    if force:
         print(f"Wrote {written}" if written
               else f"Could not write {icon_file}")
         return 0 if written else 1

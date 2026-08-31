@@ -85,10 +85,14 @@ class _Handler(FileSystemEventHandler):
 class FileTracker:
     """Watches folders, settles partial files, and merges browser history."""
 
-    def __init__(self, db, settings, on_new=None) -> None:
+    def __init__(self, db, settings, on_new=None, link_of=None) -> None:
         self.db = db
         self.settings = settings
         self.on_new = on_new                     # callback(dict) for the UI
+        #: Returns "direct" or "vpn" for activity happening right now, so a
+        #: file is filed against whichever connection was carrying traffic
+        #: when it arrived.
+        self.link_of = link_of or (lambda: "direct")
         self._observer = None
         self._roots: list[str] = []
         self._pending: dict[str, float] = {}     # path -> last activity time
@@ -214,7 +218,8 @@ class FileTracker:
         if size < int(self.settings.get("min_file_bytes", 0) or 0):
             return
         folder = os.path.dirname(path)
-        if self.db.add_file(path, name, folder, size, "down", source, app, ts):
+        if self.db.add_file(path, name, folder, size, "down", source, app, ts,
+                            link=self.link_of()):
             if self.on_new:
                 try:
                     self.on_new({
@@ -386,7 +391,8 @@ class FileTracker:
             return 0
         name = os.path.basename(path)
         if self.db.add_file(path, name, os.path.dirname(path), size,
-                            "down", source, browser, rec["ts"]):
+                            "down", source, browser, rec["ts"],
+                            link=self.link_of()):
             if self.on_new:
                 try:
                     self.on_new({"path": path, "name": name,

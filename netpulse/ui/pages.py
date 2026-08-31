@@ -13,12 +13,13 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
                                QComboBox, QFileDialog, QFrame, QGridLayout,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QListWidget, QMessageBox, QPushButton,
-                               QScrollArea, QSpinBox, QTableWidget,
+                               QScrollArea, QSpinBox, QStackedWidget,
+                               QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from .. import autostart
 from ..config import APP_VERSION
-from ..db import floor_day
+from ..db import DIRECT, VPN, floor_day
 from ..units import format_bytes, format_rate, format_when, truncate
 from . import theme
 from .widgets import (BarChart, Card, Legend, ShareBarDelegate, SpeedGraph,
@@ -155,9 +156,16 @@ class Page(QWidget):
 # dashboard
 # ---------------------------------------------------------------------------
 class DashboardPage(Page):
-    def __init__(self, db, engine, settings, parent=None) -> None:
-        super().__init__("Dashboard", "Live throughput and totals for this machine.", parent)
+    def __init__(self, db, engine, settings, parent=None, link: str = DIRECT) -> None:
+        vpn = link == VPN
+        super().__init__(
+            "VPN overview" if vpn else "Dashboard",
+            "Live throughput and totals for traffic carried through the tunnel."
+            if vpn else
+            "Live throughput and totals for traffic that did not use a VPN.",
+            parent)
         self.db, self.engine, self.settings = db, engine, settings
+        self.link = link
 
         self.wan_chip = WanIpChip()
         self.add_header_widget(self.wan_chip)
@@ -219,7 +227,7 @@ class DashboardPage(Page):
             open_in_explorer(self._file_paths[row])
 
     def refresh_live(self) -> None:
-        _, down, up = self.engine.live_series()
+        _, down, up = self.engine.live_series(self.link)
         unit = self.settings.get("units", "auto")
         self.graph.unit = unit
         self.graph.set_data(down, up)
@@ -231,10 +239,10 @@ class DashboardPage(Page):
         self.wan_chip.update_from(self.engine.wan,
                                   self.settings.get("show_wan_ip", True))
         for key, tile in self.tiles.items():
-            d, u = self.db.totals_for_period(key)
+            d, u = self.db.totals_for_period(key, link=self.link)
             tile.set_values(d, u, unit)
 
-        rows = self.db.apps_for_period("day", limit=8)
+        rows = self.db.apps_for_period("day", limit=8, link=self.link)
         total = max(1, sum(r["down"] + r["up"] for r in rows))
         self.apps_table.setRowCount(len(rows))
         for i, row in enumerate(rows):
@@ -255,7 +263,7 @@ class DashboardPage(Page):
         else:
             self.apps_note.hide()
 
-        files = self.db.recent_files(limit=8)
+        files = self.db.recent_files(limit=8, link=self.link)
         self._file_paths = [f["path"] for f in files]
         self.files_table.setRowCount(len(files))
         for i, f in enumerate(files):
@@ -273,10 +281,14 @@ class DashboardPage(Page):
 # history
 # ---------------------------------------------------------------------------
 class HistoryPage(Page):
-    def __init__(self, db, settings, parent=None) -> None:
-        super().__init__("History",
+    def __init__(self, db, settings, parent=None, link: str = DIRECT) -> None:
+        vpn = link == VPN
+        super().__init__("VPN history" if vpn else "History",
+                         "Tunnelled usage per hour, day, week, month and year."
+                         if vpn else
                          "Usage per hour, day, week, month and year.", parent)
         self.db, self.settings = db, settings
+        self.link = link
         self.period = "hour"
 
         row, self.group = pill_row([(k, label) for k, label, _ in PERIODS],
@@ -312,7 +324,7 @@ class HistoryPage(Page):
 
     def refresh(self) -> None:
         unit = self.settings.get("units", "auto")
-        data = self.db.series(self.period)
+        data = self.db.series(self.period, link=self.link)
         title = next(h for k, _, h in PERIODS if k == self.period)
         self.chart_card.title_label.setText(title)
         self.chart.set_data(data, unit)
@@ -345,10 +357,14 @@ class HistoryPage(Page):
 # applications
 # ---------------------------------------------------------------------------
 class AppsPage(Page):
-    def __init__(self, db, engine, settings, parent=None) -> None:
-        super().__init__("Applications",
-                         "Which programs used the connection.", parent)
+    def __init__(self, db, engine, settings, parent=None, link: str = DIRECT) -> None:
+        vpn = link == VPN
+        super().__init__("VPN applications" if vpn else "Applications",
+                         "Which programs sent traffic through the tunnel."
+                         if vpn else "Which programs used the connection.",
+                         parent)
         self.db, self.engine, self.settings = db, engine, settings
+        self.link = link
         self.period = "day"
 
         self.banner = QFrame()
@@ -401,7 +417,7 @@ class AppsPage(Page):
             self.banner_text.setText(
                 note + "  Machine-wide totals on the other pages are unaffected.")
 
-        rows = self.db.apps_for_period(self.period, limit=60)
+        rows = self.db.apps_for_period(self.period, limit=60, link=self.link)
         total = max(1, sum(r["down"] + r["up"] for r in rows))
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
@@ -423,12 +439,16 @@ class AppsPage(Page):
 # files
 # ---------------------------------------------------------------------------
 class FilesPage(Page):
-    def __init__(self, db, engine, settings, parent=None) -> None:
+    def __init__(self, db, engine, settings, parent=None, link: str = DIRECT) -> None:
+        vpn = link == VPN
         super().__init__(
-            "Files",
+            "VPN files" if vpn else "Files",
+            "Files that arrived while the tunnel was carrying traffic."
+            if vpn else
             "Every file that arrived in a watched folder, with its source where known.",
             parent)
         self.db, self.engine, self.settings = db, engine, settings
+        self.link = link
 
         controls = QHBoxLayout()
         controls.setSpacing(10)
@@ -492,7 +512,7 @@ class FilesPage(Page):
             since = int(time.time() - 30 * 86400)
 
         files = self.db.recent_files(limit=1000, search=self.search.text().strip(),
-                                     since=since)
+                                     since=since, link=self.link)
         self._paths = [f["path"] for f in files]
         total = sum(f["size"] for f in files)
         self.summary.setText(
@@ -521,6 +541,69 @@ class FilesPage(Page):
             folder.setToolTip(f["folder"])
             self.table.setItem(i, 5, folder)
 
+
+
+# ---------------------------------------------------------------------------
+# VPN — the same four views, for tunnelled traffic
+# ---------------------------------------------------------------------------
+VPN_SECTIONS = [
+    ("overview", "Overview"),
+    ("history", "History"),
+    ("apps", "Applications"),
+    ("files", "Files"),
+]
+
+
+class VpnPage(QWidget):
+    """Everything the main tabs show, restricted to traffic through the tunnel.
+
+    Deliberately built from the same page classes rather than copies of them:
+    a VPN view that drifted away from the main one would be worse than no VPN
+    view at all.
+    """
+
+    def __init__(self, db, engine, settings, parent=None) -> None:
+        super().__init__(parent)
+        self.db, self.engine, self.settings = db, engine, settings
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        bar = QWidget()
+        bar_row = QHBoxLayout(bar)
+        bar_row.setContentsMargins(26, 18, 26, 0)
+        row, self.group = pill_row(VPN_SECTIONS, self.show_section)
+        bar_row.addWidget(row)
+        outer.addWidget(bar)
+
+        self.overview = DashboardPage(db, engine, settings, link=VPN)
+        self.history = HistoryPage(db, settings, link=VPN)
+        self.apps = AppsPage(db, engine, settings, link=VPN)
+        self.files = FilesPage(db, engine, settings, link=VPN)
+
+        self.stack = QStackedWidget()
+        for page in (self.overview, self.history, self.apps, self.files):
+            self.stack.addWidget(page)
+        outer.addWidget(self.stack, 1)
+
+    def show_section(self, key: str) -> None:
+        index = [k for k, _ in VPN_SECTIONS].index(key)
+        self.stack.setCurrentIndex(index)
+        # Keep the pills honest when the section is changed in code rather
+        # than by a click.
+        for button in self.group.buttons():
+            button.setChecked(button.property("key") == key)
+        self.refresh()
+
+    def refresh(self) -> None:
+        page = self.stack.currentWidget()
+        if hasattr(page, "refresh"):
+            page.refresh()
+
+    def refresh_live(self) -> None:
+        if self.stack.currentWidget() is self.overview:
+            self.overview.refresh_live()
 
 # ---------------------------------------------------------------------------
 # settings

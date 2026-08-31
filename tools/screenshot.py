@@ -41,6 +41,9 @@ APPS = [
     ("Teams.exe", 0.03),
 ]
 
+#: Roughly a third of the demo traffic is shown as having gone through a tunnel.
+VPN_SHARE = 0.35
+
 FILES = [
     ("Windows11_23H2.iso", 5_368_709_120, "software-download.microsoft.com", "Chrome"),
     ("Cyberpunk2077-Patch.pkg", 2_147_483_648, "steamcontent.com", None),
@@ -82,12 +85,14 @@ def seed(db: Database) -> None:
                           random.randint(0, 59)).timestamp()
             if ts > time.time():
                 continue
-            per_app = {}
-            for name, share in APPS:
-                jitter = random.uniform(0.4, 1.7)
-                per_app[name] = (int(down * share * jitter * 0.9),
-                                 int(up * share * jitter * 0.9))
-            db.add_traffic(down, up, per_app, ts=ts)
+            for link, weight in (("direct", 1.0), ("vpn", VPN_SHARE)):
+                ldown, lup = int(down * weight), int(up * weight)
+                per_app = {}
+                for name, share in APPS:
+                    jitter = random.uniform(0.4, 1.7)
+                    per_app[name] = (int(ldown * share * jitter * 0.9),
+                                     int(lup * share * jitter * 0.9))
+                db.add_traffic(ldown, lup, per_app, ts=ts, link=link)
         day += timedelta(days=1)
 
     db.rollup(since=0)
@@ -95,7 +100,8 @@ def seed(db: Database) -> None:
     folder = str(Path.home() / "Downloads")
     for i, (name, size, source, app) in enumerate(FILES):
         db.add_file(f"{folder}/{name}", name, folder, size, "down", source, app,
-                    ts=time.time() - i * random.uniform(3600, 90000))
+                    ts=time.time() - i * random.uniform(3600, 90000),
+                    link="vpn" if i % 3 == 0 else "direct")
 
 
 def main() -> int:
@@ -134,8 +140,9 @@ def main() -> int:
     for i in range(120):
         level = max(40_000.0, level + random.uniform(-260_000, 300_000))
         burst = 2_400_000 if 70 < i < 96 else 0
-        engine.live.append((now - (120 - i), level + burst,
-                            level * random.uniform(0.06, 0.2)))
+        engine.live.append((now - (120 - i),
+                            level + burst, level * random.uniform(0.06, 0.2),
+                            level * VPN_SHARE, level * VPN_SHARE * 0.12))
 
     window = MainWindow(db, engine, settings)
     window.resize(1280, 840)
@@ -143,7 +150,7 @@ def main() -> int:
     QCoreApplication.processEvents()
 
     pages = [(0, "dashboard"), (1, "history"), (2, "applications"),
-             (3, "files"), (4, "settings")]
+             (3, "files"), (5, "settings")]
     for index, name in pages:
         window.nav_group.button(index).setChecked(True)
         window.stack.setCurrentIndex(index)
@@ -164,6 +171,19 @@ def main() -> int:
             QCoreApplication.processEvents()
         window.grab().save(str(OUT / f"history-{period}.png"))
         print("wrote", OUT / f"history-{period}.png")
+
+    # the VPN tab, one image per section
+    for key, _label in [("overview", ""), ("history", ""),
+                        ("apps", ""), ("files", "")]:
+        window.nav_group.button(4).setChecked(True)
+        window.stack.setCurrentIndex(4)
+        window.vpn.show_section(key)
+        if key == "overview":
+            window.vpn.refresh_live()
+        for _ in range(6):
+            QCoreApplication.processEvents()
+        window.grab().save(str(OUT / f"vpn-{key}.png"))
+        print("wrote", OUT / f"vpn-{key}.png")
 
     db.close()
     return 0

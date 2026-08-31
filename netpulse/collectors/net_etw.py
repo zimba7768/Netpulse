@@ -24,6 +24,7 @@ import time
 from collections import defaultdict
 
 from ..autostart import is_admin
+from .net_system import VPN, classify_adapter
 
 try:
     import psutil
@@ -74,9 +75,14 @@ class EtwNetCollector:
         self.reason = ""
         self._job = None
         self._lock = threading.Lock()
-        self._counts: dict[int, list[int]] = defaultdict(lambda: [0, 0])  # pid -> [down, up]
+        # (pid, link) -> [down, up]
+        self._counts: dict[tuple[int, str], list[int]] = defaultdict(lambda: [0, 0])
         self._names: dict[int, str] = {}
         self._names_ts = 0.0
+        #: Local addresses belonging to tunnel adapters. An event whose local
+        #: end is one of these went through the VPN.
+        self._tunnel_ips: set[str] = set()
+        self._tunnel_ts = 0.0
         self._running = False
         # Diagnostics: distinguishes "session never started" from "session
         # running but nothing is being decoded".
@@ -119,6 +125,7 @@ class EtwNetCollector:
         self.available = True
         self.reason = ""
         self._refresh_names(force=True)
+        self._refresh_tunnels(force=True)
         return True
 
     def stop(self) -> None:
@@ -147,6 +154,13 @@ class EtwNetCollector:
             size = _as_int(_pick(data, "size", "Size"))
             if not size:
                 return
+            # For a send the local end is the source; for a receive it is the
+            # destination. Whichever it is, if it belongs to a tunnel adapter
+            # this conversation went through the VPN.
+            local = _pick(data, "saddr", "SourceAddress") if idx else None
+            if local is None:
+                local = _pick(data, "daddr", "DestinationAddress")
+            link = VPN if str(local) in self._tunnel_ips else "direct"
             pid = _as_int(_pick(data, "PID", "pid", "ProcessId"))
             if pid is None:
                 # Fall back to the record header when the payload omits it.
@@ -161,7 +175,7 @@ class EtwNetCollector:
 
             self.events_used += 1
             with self._lock:
-                self._counts[pid][idx] += size
+                self._counts[(pid, link)][idx] += size
         except Exception:
             return
 
@@ -185,6 +199,26 @@ class EtwNetCollector:
         except Exception:
             pass
 
+    def _refresh_tunnels(self, force: bool = False) -> None:
+        """Track which local addresses belong to VPN adapters."""
+        if psutil is None:
+            return
+        now = time.time()
+        if not force and now - self._tunnel_ts < 10:
+            return
+        self._tunnel_ts = now
+        try:
+            found: set[str] = set()
+            for name, entries in psutil.net_if_addrs().items():
+                if classify_adapter(name) != VPN:
+                    continue
+                for entry in entries:
+                    if entry.address:
+                        found.add(entry.address.split("%")[0])
+            self._tunnel_ips = found
+        except Exception:
+            pass
+
     def _name_for(self, pid: int) -> str:
         name = self._names.get(pid)
         if name:
@@ -199,8 +233,9 @@ class EtwNetCollector:
         return f"PID {pid}" if pid > 0 else "System"
 
     # ------------------------------------------------------------------ drain
-    def drain(self) -> dict[str, tuple[int, int]]:
-        """Return {process name: (down, up)} accumulated since the last call."""
+    def drain(self) -> dict[str, dict[str, tuple[int, int]]]:
+        """Return {link: {process name: (down, up)}} since the last call."""
+        self._refresh_tunnels()
         if not self._running:
             return {}
         with self._lock:
@@ -209,9 +244,11 @@ class EtwNetCollector:
         if not counts:
             return {}
         self._refresh_names()
-        merged: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-        for pid, (down, up) in counts.items():
+        merged: dict[str, dict[str, list[int]]] = defaultdict(
+            lambda: defaultdict(lambda: [0, 0]))
+        for (pid, link), (down, up) in counts.items():
             name = self._name_for(pid)
-            merged[name][0] += down
-            merged[name][1] += up
-        return {k: (v[0], v[1]) for k, v in merged.items()}
+            merged[link][name][0] += down
+            merged[link][name][1] += up
+        return {link: {name: (v[0], v[1]) for name, v in apps.items()}
+                for link, apps in merged.items()}

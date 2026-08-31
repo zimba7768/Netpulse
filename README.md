@@ -29,6 +29,9 @@
   when it arrived, and where it came from.
 - **Live throughput** — a two-minute rolling graph, plus a tray icon whose
   arrows brighten with activity.
+- **A separate VPN tab** — the same overview, history, applications and files,
+  restricted to what actually went through the tunnel. The main pages then show
+  direct traffic only, so the two are never added together.
 - **Your public IP** — shown beside the dashboard title, click to copy. Follows
   a VPN within seconds of it connecting or dropping.
 - **Local and private** — one SQLite file in `%APPDATA%\NetPulse`. No account,
@@ -53,6 +56,11 @@ table underneath.
 **Files** — what arrived, how big, and from where.
 
 ![Files](docs/screenshots/files.png)
+
+**VPN** — the same four views, tunnelled traffic only.
+
+![VPN overview](docs/screenshots/vpn-overview.png)
+![VPN applications](docs/screenshots/vpn-apps.png)
 
 </details>
 
@@ -101,6 +109,23 @@ Machine-wide upload and download come from the byte counters Windows keeps per
 network adapter, the same source Task Manager uses. Exact, never misses traffic,
 needs no special permissions. Virtual adapters (Hyper-V, WSL, VMware,
 VirtualBox, loopback) are excluded so nothing is counted twice.
+
+### Direct and tunnelled traffic
+
+A VPN adapter and the physical adapter beneath it both count the same
+conversation — once as plaintext entering the tunnel, once as ciphertext on the
+wire. Adding them together doubles every figure while a VPN is connected, which
+is exactly what earlier versions did.
+
+So the two are measured apart. The tunnel adapter's own counters are the VPN
+figure, exact as any other adapter reading. **Direct** is what remains of the
+physical adapter once the tunnel's share is subtracted — the traffic that
+genuinely bypassed the VPN, plus a few percent of encryption overhead, which is
+real traffic on the wire and has to live somewhere.
+
+Every row in the database carries which side it belongs to, so the VPN tab and
+the main pages are two views of one store rather than two stores that can drift.
+Files are tagged the same way, by whether the tunnel was up when they arrived.
 
 ### Per-application — kernel network trace
 
@@ -204,7 +229,7 @@ changes included.
 
 ```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v   # 35 tests
+python -m unittest discover -s tests -v   # 102 tests
 python -m pyflakes netpulse main.py tools tests
 ```
 
@@ -247,10 +272,10 @@ netpulse/
     theme.py                colour roles and stylesheet
     assets.py               generated icons and control artwork
     widgets.py              cards, stat tiles, both charts
-    pages.py                the five pages
+    pages.py                the pages, including the VPN tab
     main_window.py          sidebar navigation and refresh clock
     tray.py                 notification-area icon and app icon
-tests/                      storage, autostart and icon tests
+tests/                      storage, link-split, autostart and icon tests
 tools/                      screenshot and smoke-test harnesses
 ```
 
@@ -281,9 +306,12 @@ restart.
 overhead and local network traffic — copying from a NAS, casting to a TV. ISPs
 count only what crosses their border.
 
-**A VPN is running and totals look doubled.** Some VPN clients present a second
-adapter carrying the same traffic. Most are excluded by name already; if yours
-isn't, add it to `EXCLUDE_HINTS` in `netpulse/collectors/net_system.py`.
+**A VPN is running and totals look doubled.** They shouldn't from 1.1.0 onward —
+tunnel adapters are recognised by name and subtracted rather than added. If
+yours isn't recognised, add it to `TUNNEL_HINTS` in
+`netpulse/collectors/net_system.py`; the Settings page lists every adapter and
+how it is being treated. Figures recorded before 1.1.0 were doubled while a VPN
+was connected — **Settings → Reset all statistics** clears them.
 
 **I ticked "start when I sign in" but it's not in Task Manager's Startup tab.**
 Expected if it registered as a scheduled task — check `taskschd.msc` instead.
