@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
 
 from .. import autostart
 from ..config import APP_VERSION
+from ..collectors.net_system import vpn_active
 from ..db import DIRECT, VPN, floor_day
 from ..units import format_bytes, format_rate, format_when, truncate
 from . import theme
@@ -175,6 +176,21 @@ class DashboardPage(Page):
         engine.wan.rechecking.connect(self._wan_rechecking)
         self.wan_chip.update_from(engine.wan, settings.get("show_wan_ip", True))
 
+        # While a tunnel is up, this page is deliberately not showing most of
+        # the traffic — and a page quietly missing what you expect to see reads
+        # as broken. It costs one line to say where the rest went, and where
+        # the small figure that remains comes from.
+        self.vpn_notice = QFrame()
+        self.vpn_notice.setObjectName("Banner")
+        notice_row = QHBoxLayout(self.vpn_notice)
+        notice_row.setContentsMargins(16, 12, 16, 12)
+        self.vpn_notice_text = QLabel()
+        self.vpn_notice_text.setWordWrap(True)
+        self.vpn_notice_text.setStyleSheet(f"color:{theme.TEXT_SECONDARY};")
+        notice_row.addWidget(self.vpn_notice_text, 1)
+        self.vpn_notice.setVisible(False)
+        self.content.addWidget(self.vpn_notice)
+
         tiles = QHBoxLayout()
         tiles.setSpacing(14)
         self.tiles: dict[str, StatTile] = {}
@@ -217,6 +233,23 @@ class DashboardPage(Page):
         self.content.addLayout(columns, 1)
         self._file_paths: list[str] = []
 
+    def _update_vpn_notice(self) -> None:
+        """Explain the small figure on the main dashboard during a VPN session."""
+        if self.link != DIRECT:
+            return                    # the VPN tab is not missing anything
+        try:
+            active = vpn_active()
+        except Exception:
+            active = False
+        self.vpn_notice.setVisible(active)
+        if active:
+            self.vpn_notice_text.setText(
+                "A VPN is connected, so tunnelled traffic is on the VPN tab "
+                "rather than here. What remains on this page is traffic that "
+                "did not use the tunnel: your local network, plus the "
+                "encryption overhead the VPN adds on the wire — normally a "
+                "few percent of the tunnelled figure.")
+
     def _wan_rechecking(self) -> None:
         if self.settings.get("show_wan_ip", True):
             self.wan_chip.set_checking()
@@ -238,6 +271,7 @@ class DashboardPage(Page):
         unit = self.settings.get("units", "auto")
         self.wan_chip.update_from(self.engine.wan,
                                   self.settings.get("show_wan_ip", True))
+        self._update_vpn_notice()
         for key, tile in self.tiles.items():
             d, u = self.db.totals_for_period(key, link=self.link)
             tile.set_values(d, u, unit)

@@ -144,6 +144,10 @@ def main() -> int:
                             level + burst, level * random.uniform(0.06, 0.2),
                             level * VPN_SHARE, level * VPN_SHARE * 0.12))
 
+    # Pretend a tunnel is up, so the dashboard's VPN notice is captured too.
+    from netpulse.ui import pages as pages_module
+    pages_module.vpn_active = lambda: True
+
     window = MainWindow(db, engine, settings)
     window.resize(1280, 840)
     window.show()
@@ -161,6 +165,15 @@ def main() -> int:
             QCoreApplication.processEvents()
         window.grab().save(str(OUT / f"{name}.png"))
         print("wrote", OUT / f"{name}.png")
+        if name == "dashboard":
+            # …and again with no tunnel, since the notice must disappear.
+            pages_module.vpn_active = lambda: False
+            window.refresh_current()
+            for _ in range(6):
+                QCoreApplication.processEvents()
+            window.grab().save(str(OUT / "dashboard-no-vpn.png"))
+            print("wrote", OUT / "dashboard-no-vpn.png")
+            pages_module.vpn_active = lambda: True
 
     # every history period, since each has its own axis behaviour
     for period in ("hour", "day", "week", "month", "year"):

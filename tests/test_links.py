@@ -160,5 +160,78 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.db.totals_for_period("day", link=VPN)[:2], (600, 60))
 
 
+class RealisticVpnSessionTests(unittest.TestCase):
+    """What the Dashboard should read during an ordinary VPN session.
+
+    The expectation worth pinning is not "direct is zero" — it cannot be.
+    WireGuard wraps every packet, so the physical adapter always carries more
+    bytes than the tunnel does, and that overhead is real traffic on the wire.
+    What must hold is that the residual stays *small*: overhead, not a second
+    copy of the session.
+    """
+
+    #: WireGuard adds roughly 60 bytes to a 1420-byte payload — about 4%.
+    OVERHEAD = 1.045
+
+    def setUp(self) -> None:
+        self.fake = FakePsutil({"Ethernet": (0, 0), "SurfsharkWireGuard": (0, 0)})
+        self._real = net_system.psutil
+        net_system.psutil = self.fake
+        self.collector = SystemNetCollector()
+
+    def tearDown(self) -> None:
+        net_system.psutil = self._real
+
+    def run_session(self, seconds: int = 60, per_second: int = 2_000_000,
+                    lan_per_second: int = 0) -> dict[str, list[int]]:
+        """Push traffic through the tunnel and total what each side records."""
+        eth = [0, 0]
+        tun = [0, 0]
+        totals = {DIRECT: [0, 0], VPN: [0, 0]}
+        for _ in range(seconds):
+            tun[0] += per_second
+            tun[1] += per_second // 20
+            eth[0] += int(per_second * self.OVERHEAD) + lan_per_second
+            eth[1] += int(per_second // 20 * self.OVERHEAD)
+            self.fake.counters["Ethernet"] = tuple(eth)
+            self.fake.counters["SurfsharkWireGuard"] = tuple(tun)
+            sample = self.collector.sample()
+            for link in (DIRECT, VPN):
+                totals[link][0] += sample[link][0]
+                totals[link][1] += sample[link][1]
+        return totals
+
+    def test_the_vpn_tab_gets_the_whole_session(self) -> None:
+        totals = self.run_session()
+        self.assertEqual(totals[VPN][0], 60 * 2_000_000)
+
+    def test_the_dashboard_shows_only_overhead(self) -> None:
+        totals = self.run_session()
+        share = totals[DIRECT][0] / totals[VPN][0]
+        self.assertLess(share, 0.10,
+                        "the Dashboard is showing more than encryption overhead")
+        self.assertGreater(share, 0.0,
+                           "overhead is real traffic and should not vanish")
+
+    def test_nothing_is_counted_twice(self) -> None:
+        # The bug this whole split exists to fix: the two sides together must
+        # equal the wire, not double it.
+        totals = self.run_session()
+        wire = 60 * int(2_000_000 * self.OVERHEAD)   # per second, as sampled
+        self.assertEqual(totals[DIRECT][0] + totals[VPN][0], wire)
+
+    def test_traffic_that_bypasses_the_tunnel_lands_on_the_dashboard(self) -> None:
+        # A NAS copy or a local DNS server never enters the tunnel, and should
+        # show up as direct rather than being hidden.
+        plain = self.run_session(lan_per_second=0)[DIRECT][0]
+        withlan = self.run_session(lan_per_second=500_000)[DIRECT][0]
+        self.assertGreater(withlan - plain, 60 * 400_000)
+
+    def test_an_idle_tunnel_records_nothing_on_either_side(self) -> None:
+        totals = self.run_session(seconds=10, per_second=0)
+        self.assertEqual(totals[VPN], [0, 0])
+        self.assertEqual(totals[DIRECT], [0, 0])
+
+
 if __name__ == "__main__":
     unittest.main()

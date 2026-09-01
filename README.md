@@ -127,6 +127,27 @@ Every row in the database carries which side it belongs to, so the VPN tab and
 the main pages are two views of one store rather than two stores that can drift.
 Files are tagged the same way, by whether the tunnel was up when they arrived.
 
+While a tunnel is up the Dashboard says so, in a line above the totals: the
+tunnelled traffic is on the VPN tab, and what remains here is local traffic plus
+overhead. A page silently missing most of what you expect to see reads as
+broken, and it costs one sentence to prevent that.
+
+**The Dashboard will not read zero while a VPN is connected, and should not.**
+Encryption overhead is real traffic on the wire — WireGuard adds roughly 4% —
+and it has to be reported somewhere. Genuinely untunnelled traffic lands there
+too: your LAN, a local DNS server, a NAS copy, anything in your VPN client's
+bypass list. A few percent of the tunnelled figure is correct. A number
+approaching your full traffic is not.
+
+`python tools/diagnose-split.py` tells you which you are looking at. It
+measures your idle background first — a machine on a home network receives a
+constant trickle of broadcast traffic, ARP and mDNS and SSDP and whatever your
+router and local DNS server are saying, which never enters the tunnel and is
+correctly counted as direct — then measures again under a real download and
+compares what is left over against the tunnelled volume. It refuses to give a
+verdict on too little traffic, because per-packet overhead is a large share of
+a small number and comparing percentages there produces false alarms.
+
 ### Per-application — kernel network trace
 
 Windows exposes no ordinary API for per-process byte counts. NetPulse reads what
@@ -237,7 +258,7 @@ changes included.
 
 ```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v   # 118 tests
+python -m unittest discover -s tests -v   # 134 tests
 python -m pyflakes netpulse main.py tools tests
 ```
 
@@ -246,6 +267,8 @@ Two extra harnesses, both used by CI:
 ```bash
 python tools/screenshot.py out/     # render every page offscreen, with demo data
 python tools/smoketest.py           # run the real engine against real traffic
+python tools/diagnose-wanip.py 120  # watch the public-IP resolver work
+python tools/diagnose-split.py      # check the direct/VPN split against raw counters
 ```
 
 `tools/screenshot.py` is how the images above are produced — it seeds a database
