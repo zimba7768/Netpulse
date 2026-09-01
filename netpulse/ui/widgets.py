@@ -160,6 +160,20 @@ class WanIpChip(QFrame):
         when = time.strftime("%H:%M:%S", time.localtime(resolver.checked_at))
         failures = getattr(resolver, "failures", 0)
 
+        if not getattr(resolver, "running", True):
+            # It ran and is no longer running. Saying "retrying…" here would be
+            # a lie — nothing is going to try again — and that lie is exactly
+            # what made a dead lookup thread invisible for a whole session.
+            self._address = ""
+            self._restore.stop()
+            self.value.setText("stopped")
+            self.value.setStyleSheet(f"color:{theme.MUTED};")
+            self.setToolTip(
+                "The address lookup has stopped running.\n"
+                "Restart NetPulse to start it again."
+                + (f"\n\n{detail}" if detail else ""))
+            return
+
         if 0 < failures < self.PATIENCE:
             # Still working through the retry ladder. Saying "unavailable"
             # here would be wrong: another attempt is already scheduled, and

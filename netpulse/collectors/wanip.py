@@ -40,12 +40,21 @@ ENDPOINTS: list[tuple[str, str]] = [
     ("https://icanhazip.com", "icanhazip.com"),
     ("https://ifconfig.me/ip", "ifconfig.me"),
     ("https://ipinfo.io/ip", "ipinfo.io"),
+    # Last resort, and the important one: an IP literal, so it needs no DNS at
+    # all. Every provider above dies the moment name resolution is filtered —
+    # by ad-blocking DNS, a router, or a VPN client pushing its own resolver —
+    # which is exactly the situation where the address has just changed and is
+    # most worth knowing. Cloudflare's certificate covers the address itself,
+    # so TLS still validates without a hostname.
+    ("https://1.1.1.1/cdn-cgi/trace", "1.1.1.1 (no DNS)"),
 ]
 
 #: Generous, because the first attempts happen while a VPN tunnel is still
 #: settling and everything is slow.
 TIMEOUT = 8.0
-MAX_BYTES = 128          # a valid answer is under 50 bytes; more means an error page
+#: A bare address is under 50 bytes; the trace endpoint answers with a few
+#: short lines. Anything larger is an error page, and is rejected on parsing.
+MAX_BYTES = 512
 USER_AGENT = "NetPulse/1.0 (+https://github.com/zimba7768/Netpulse)"
 
 #: How often the adapter fingerprint is compared. Local only, so it is cheap.
@@ -78,6 +87,15 @@ def parse_ip(text: str) -> str:
     if not text:
         return ""
     candidate = text.strip().split()[0].strip() if text.strip() else ""
+    # Cloudflare's trace endpoint answers with "key=value" lines rather than a
+    # bare address. That is a defined format, not prose, so reading one named
+    # field out of it is safe in a way that hunting for digits in free text
+    # would not be.
+    if "ip=" in text:
+        for line in text.splitlines():
+            if line.startswith("ip="):
+                candidate = line[3:].strip()
+                break
     try:
         address = ipaddress.ip_address(candidate)
     except ValueError:
@@ -151,6 +169,10 @@ class WanIpResolver(QObject):
         #: trusted, as opposed to merely being unconfirmed.
         self.suspect = False
         self.last_error = ""
+        #: Unexpected errors caught by the loop itself, as opposed to a
+        #: provider simply not answering. Non-zero means something is wrong
+        #: that is worth reporting rather than quietly retrying.
+        self.loop_errors = 0
         #: The provider that answered most recently, tried first next time.
         self.preferred = ""
         self._announced = False
@@ -291,25 +313,66 @@ class WanIpResolver(QObject):
         return self.interval
 
     # ------------------------------------------------------------------ loop
+    def _run_due(self) -> None:
+        """Run any lookup that has come due, and queue the next one."""
+        if not self._take_due(time.time()):
+            return
+        if self.check():
+            self._clear_due()          # settled on a new address; drop retries
+        if not self._pending():
+            self.schedule(self.next_delay())
+
+    def _watch_network(self) -> None:
+        """Notice a local change and queue the re-check ladder."""
+        current = network_fingerprint()
+        if current != self.fingerprint:
+            self.fingerprint = current
+            self.suspect = True
+            self.schedule_recheck()
+            self.rechecking.emit()
+
     def _run(self) -> None:
-        self.fingerprint = network_fingerprint()
+        try:
+            self.fingerprint = network_fingerprint()
+        except Exception:
+            self.fingerprint = ()
+
         while not self._stop.is_set():
-            now = time.time()
-            if self._take_due(now):
-                if self.check():
-                    # Settled on a new address — drop any remaining retries.
-                    self._clear_due()
-                if not self._pending():
-                    self.schedule(self.next_delay())
+            # Nothing in a single pass is worth the thread for. An unguarded
+            # loop dies on the first unexpected error and takes the whole
+            # feature with it silently: no more lookups, no more adapter
+            # watching, and the interface goes on showing "retrying…" for the
+            # rest of the session because nothing ever tells it otherwise.
+            # Failing loudly into the tooltip and carrying on is strictly
+            # better than a resolver that is quietly no longer there.
+            try:
+                self._run_due()
+            except Exception as exc:
+                self._record_loop_error(exc)
 
             self._wake.wait(POLL_SECONDS)
             if self._stop.is_set():
                 break
             self._wake.clear()
 
-            current = network_fingerprint()
-            if current != self.fingerprint:
-                self.fingerprint = current
-                self.suspect = True
-                self.schedule_recheck()
-                self.rechecking.emit()
+            try:
+                self._watch_network()
+            except Exception as exc:
+                self._record_loop_error(exc)
+
+    def _record_loop_error(self, exc: BaseException) -> None:
+        """Treat an unexpected error as a failed attempt and keep going."""
+        self.failures += 1
+        self.loop_errors += 1
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        if not self.checked_at:
+            # Nothing has ever succeeded, so the interface is still waiting on
+            # a first answer. Give it one, or it waits forever.
+            self.checked_at = time.time()
+        if not self._pending():
+            self.schedule(self.next_delay())
+
+    @property
+    def running(self) -> bool:
+        """True while the background thread is alive."""
+        return self._thread is not None and self._thread.is_alive()

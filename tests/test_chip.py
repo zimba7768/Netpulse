@@ -24,12 +24,13 @@ from netpulse.ui.widgets import WanIpChip           # noqa: E402
 
 class FakeResolver:
     def __init__(self, address="", source="", checked_at=0.0, failures=0,
-                 last_error=""):
+                 last_error="", running=True):
         self.address = address
         self.source = source
         self.checked_at = checked_at
         self.failures = failures
         self.last_error = last_error
+        self.running = running
 
 
 class ChipStateTests(unittest.TestCase):
@@ -85,6 +86,57 @@ class ChipStateTests(unittest.TestCase):
         """Otherwise it would sit on 'retrying…' long after it had given up."""
         from netpulse.collectors import wanip
         self.assertLess(WanIpChip.PATIENCE, len(wanip.RETRY_BACKOFF))
+
+
+class StoppedResolverTests(unittest.TestCase):
+    """A resolver that is no longer running must not look like a busy one.
+
+    The lookup thread had no exception guard, so one unexpected error ended it
+    for the session. Because the chip reads the resolver's state rather than
+    its pulse, it went on reporting "retrying…" indefinitely — a promise of an
+    attempt that was never coming.
+    """
+
+    def setUp(self) -> None:
+        self.chip = WanIpChip()
+
+    def test_a_dead_resolver_says_so(self):
+        self.chip.update_from(
+            FakeResolver(checked_at=time.time(), failures=1,
+                         last_error="RuntimeError: boom", running=False), True)
+        self.assertEqual(self.chip.value.text(), "stopped")
+        self.assertIn("stopped running", self.chip.toolTip())
+        self.assertIn("boom", self.chip.toolTip())
+
+    def test_stopped_beats_retrying(self):
+        # Same failure count that would otherwise read as "retrying…".
+        busy = FakeResolver(checked_at=time.time(), failures=1)
+        self.chip.update_from(busy, True)
+        self.assertEqual(self.chip.value.text(), "retrying…")
+        busy.running = False
+        self.chip.update_from(busy, True)
+        self.assertEqual(self.chip.value.text(), "stopped")
+
+    def test_a_known_address_still_wins(self):
+        # If it did find an address before dying, showing it beats an alarm.
+        self.chip.update_from(
+            FakeResolver("93.184.216.34", "ipify.org", time.time(),
+                         running=False), True)
+        self.assertEqual(self.chip.value.text(), "93.184.216.34")
+
+    def test_switched_off_is_not_reported_as_stopped(self):
+        self.chip.update_from(FakeResolver(running=False), False)
+        self.assertEqual(self.chip.value.text(), "off")
+
+    def test_an_older_resolver_without_the_flag_is_assumed_running(self):
+        class Minimal:
+            address = ""
+            source = ""
+            checked_at = time.time()
+            failures = 1
+            last_error = ""
+        self.chip.update_from(Minimal(), True)
+        self.assertEqual(self.chip.value.text(), "retrying…")
 
 
 if __name__ == "__main__":

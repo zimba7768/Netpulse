@@ -7,6 +7,7 @@ interface, and none may raise.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import socket
 import sys
@@ -473,6 +474,145 @@ class ProviderPreferenceTests(unittest.TestCase):
         self.assertEqual(resolver.lookup()[0], "47.194.12.239",
                          "a stale preference must not break the lookup")
         self.assertGreater(len(self.calls), 1)
+
+
+class TraceEndpointTests(unittest.TestCase):
+    """The DNS-free fallback answers in a different shape to the others."""
+
+    BODY = ("fl=12f34\n"
+            "h=1.1.1.1\n"
+            "ip=93.184.216.34\n"
+            "ts=1756600000.123\n"
+            "visit_scheme=https\n"
+            "uag=NetPulse/1.0\n"
+            "colo=LHR\n")
+
+    def test_the_named_field_is_read(self) -> None:
+        self.assertEqual(wanip.parse_ip(self.BODY), "93.184.216.34")
+
+    def test_a_private_answer_is_still_rejected(self) -> None:
+        self.assertEqual(wanip.parse_ip("fl=x\nip=192.168.1.8\n"), "")
+
+    def test_the_field_is_matched_at_the_start_of_a_line(self) -> None:
+        # "sip=" or "ip=" inside another value must not be mistaken for it.
+        self.assertEqual(wanip.parse_ip("uag=ip=1.2.3.4\nip=93.184.216.34\n"),
+                         "93.184.216.34")
+
+    def test_a_body_with_no_ip_field_gives_nothing(self) -> None:
+        self.assertEqual(wanip.parse_ip("fl=x\nts=1\ncolo=LHR\n"), "")
+
+    def test_the_fallback_needs_no_name_resolution(self) -> None:
+        # The whole point of this provider: if it had a hostname it would fail
+        # in exactly the situation it exists for.
+        url = dict((name, url) for url, name in wanip.ENDPOINTS)["1.1.1.1 (no DNS)"]
+        host = url.split("//", 1)[1].split("/", 1)[0]
+        ipaddress.ip_address(host)          # raises if it is not a literal
+
+    def test_it_is_tried_last(self) -> None:
+        # It is a fallback, not a default: the ordinary providers come first.
+        self.assertEqual(wanip.ENDPOINTS[-1][1], "1.1.1.1 (no DNS)")
+
+
+class LoopSurvivalTests(unittest.TestCase):
+    """The background loop must outlive anything that goes wrong inside it.
+
+    This is the defect these tests exist for: an unguarded loop died on its
+    first unexpected exception, and nothing anywhere said so. Lookups stopped,
+    adapter watching stopped, and the chip went on reading "retrying…" for the
+    rest of the session because the state it was reading never changed again.
+    """
+
+    def setUp(self) -> None:
+        # The loop paces itself against the adapter poll; shorten it so the
+        # suite does not spend seconds waiting to watch it go round.
+        self._poll = wanip.POLL_SECONDS
+        wanip.POLL_SECONDS = 0.02
+
+    def tearDown(self) -> None:
+        wanip.POLL_SECONDS = self._poll
+
+    def resolver(self) -> wanip.WanIpResolver:
+        r = wanip.WanIpResolver(interval=0.05)
+        # These tests are about the loop staying alive, not about how long it
+        # waits between attempts, so the backoff ladder is collapsed.
+        r.next_delay = lambda: 0.02
+        self.addCleanup(r.stop)
+        return r
+
+    def test_a_raising_check_does_not_kill_the_loop(self) -> None:
+        r = self.resolver()
+        calls = []
+
+        def exploding_check():
+            calls.append(1)
+            raise RuntimeError("boom")
+
+        r.check = exploding_check
+        r.start()
+        deadline = time.time() + 3.0
+        while len(calls) < 3 and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertGreaterEqual(len(calls), 3,
+                                "the loop stopped after the first exception")
+        self.assertTrue(r.running, "the thread died")
+
+    def test_it_recovers_once_the_error_stops(self) -> None:
+        r = self.resolver()
+        state = {"fail": True}
+
+        def flaky_check():
+            if state["fail"]:
+                raise RuntimeError("boom")
+            r.address, r.source = "93.184.216.34", "test"
+            r.failures = 0
+            r.checked_at = time.time()
+            return True
+
+        r.check = flaky_check
+        r.start()
+        time.sleep(0.4)
+        self.assertEqual(r.address, "")
+        state["fail"] = False
+        deadline = time.time() + 3.0
+        while not r.address and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(r.address, "93.184.216.34",
+                         "the loop never resumed after recovering")
+
+    def test_a_raising_fingerprint_does_not_kill_the_loop(self) -> None:
+        # The adapter watch runs on every pass, so it is the likelier of the
+        # two to be handed something unexpected by the platform.
+        r = self.resolver()
+        real = wanip.network_fingerprint
+        wanip.network_fingerprint = lambda: (_ for _ in ()).throw(OSError("nope"))
+        self.addCleanup(setattr, wanip, "network_fingerprint", real)
+        r.check = lambda: False
+        r.start()
+        time.sleep(0.5)
+        self.assertTrue(r.running, "the thread died watching adapters")
+
+    def test_an_error_is_recorded_rather_than_swallowed(self) -> None:
+        r = self.resolver()
+        r.check = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        r.start()
+        deadline = time.time() + 3.0
+        while not r.loop_errors and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertGreater(r.loop_errors, 0)
+        self.assertIn("boom", r.last_error)
+        # It also has to count as a failed attempt, or the chip would go on
+        # saying "checking…" while nothing was happening.
+        self.assertGreater(r.failures, 0)
+        self.assertGreater(r.checked_at, 0)
+
+    def test_a_dead_loop_is_visible(self) -> None:
+        r = self.resolver()
+        self.assertFalse(r.running)
+        r.check = lambda: False
+        r.start()
+        self.assertTrue(r.running)
+        r.stop()
+        self.assertFalse(r.running)
 
 
 if __name__ == "__main__":

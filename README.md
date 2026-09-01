@@ -168,11 +168,19 @@ first answer can still be the old address. A slow periodic check every 15
 minutes remains as a backstop for changes with no local cause, such as an ISP
 lease renewal.
 
-Five providers are tried in turn, and whichever answered last is tried first
+Six providers are tried in turn, and whichever answered last is tried first
 next time — ad-blocking DNS, router filters and VPN "clean browsing" options
 block some of these by name, and remembering a working one avoids walking the
 list on every check. While attempts are still in progress the chip reads
 *retrying…* rather than *unavailable*, because those mean different things.
+
+The last provider in the list is the one that matters when the others are
+blocked: it is reached at `https://1.1.1.1/...`, an address rather than a name,
+so it needs no DNS at all. Filtered name resolution takes out every other
+provider at once — and it tends to do so precisely when a VPN has just
+connected, which is the moment the address is most worth knowing. Cloudflare's
+certificate covers the address itself, so TLS still validates with no hostname
+involved.
 
 That is a small outbound request from an application built to watch outbound
 requests, so it is worth stating plainly: it sends nothing but the request
@@ -229,7 +237,7 @@ changes included.
 
 ```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v   # 102 tests
+python -m unittest discover -s tests -v   # 118 tests
 python -m pyflakes netpulse main.py tools tests
 ```
 
@@ -312,6 +320,14 @@ yours isn't recognised, add it to `TUNNEL_HINTS` in
 `netpulse/collectors/net_system.py`; the Settings page lists every adapter and
 how it is being treated. Figures recorded before 1.1.0 were doubled while a VPN
 was connected — **Settings → Reset all statistics** clears them.
+
+**The WAN IP chip is stuck on "retrying…".** Up to 1.1.1 that could mean the
+lookup thread had died: it had no exception guard, so a single unexpected error
+ended it for the session while the interface went on promising an attempt that
+was never coming. From 1.1.2 the loop survives any error, records it, and keeps
+going — and if it ever does stop, the chip reads **stopped** and its tooltip
+names the error. Run `python tools\diagnose-wanip.py 120` to watch the resolver
+work and toggle a VPN while it does.
 
 **I ticked "start when I sign in" but it's not in Task Manager's Startup tab.**
 Expected if it registered as a scheduled task — check `taskschd.msc` instead.
