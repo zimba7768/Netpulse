@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import urllib.error
 import sys
 import time
 import unittest
@@ -613,6 +614,112 @@ class LoopSurvivalTests(unittest.TestCase):
         self.assertTrue(r.running)
         r.stop()
         self.assertFalse(r.running)
+
+
+class ProxyStalenessTests(unittest.TestCase):
+    """Each lookup must read the network configuration afresh.
+
+    urllib caches one opener per process, proxy settings and all, from the
+    first request onward. In a monitor that runs for days across VPNs coming
+    and going, that cache pins the lookup to a configuration that may no longer
+    exist — which presents to the user as "unavailable" while a freshly started
+    script on the same machine works perfectly.
+    """
+
+    def test_a_new_opener_is_built_for_every_lookup(self) -> None:
+        built = []
+        real = wanip.urllib.request.build_opener
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                class Response:
+                    def read(self, n): return b"93.184.216.34"
+                    def __enter__(self): return self
+                    def __exit__(self, *a): return False
+                return Response()
+
+        def counting(*handlers):
+            built.append(handlers)
+            return FakeOpener()
+
+        wanip.urllib.request.build_opener = counting
+        self.addCleanup(setattr, wanip.urllib.request, "build_opener", real)
+        wanip.fetch_text("https://example.invalid/ip")
+        wanip.fetch_text("https://example.invalid/ip")
+        self.assertEqual(len(built), 2,
+                         "the opener was reused between lookups")
+
+    def test_proxy_settings_are_re_read_each_time(self) -> None:
+        reads = []
+        real_proxies = wanip.urllib.request.getproxies
+        wanip.urllib.request.getproxies = lambda: reads.append(1) or {}
+        self.addCleanup(setattr, wanip.urllib.request, "getproxies",
+                        real_proxies)
+        wanip.build_opener()
+        wanip.build_opener()
+        self.assertEqual(len(reads), 2,
+                         "proxy configuration was cached across lookups")
+
+    def test_the_module_global_opener_is_not_used(self) -> None:
+        # urlopen is the cached path; using it here would reintroduce the bug.
+        import inspect
+        source = inspect.getsource(wanip.fetch_text)
+        self.assertNotIn("urlopen", source)
+        self.assertIn("build_opener", source)
+
+
+class ErrorDescriptionTests(unittest.TestCase):
+    """What the tooltip says when a lookup fails.
+
+    Six providers all reporting "URLError" ruled nothing in or out and cost a
+    whole round of diagnosis. The wrapper is never the answer; the cause is.
+    """
+
+    def describe(self, exc):
+        return wanip.describe_error(exc)
+
+    def test_a_refused_connection_is_named(self) -> None:
+        text = self.describe(urllib.error.URLError(
+            ConnectionRefusedError(10061, "actively refused it")))
+        self.assertIn("ConnectionRefusedError", text)
+        self.assertIn("10061", text)
+        self.assertIn("actively refused", text)
+
+    def test_a_timeout_is_distinguishable_from_a_refusal(self) -> None:
+        timeout = self.describe(urllib.error.URLError(
+            TimeoutError(10060, "A connection attempt failed")))
+        refused = self.describe(urllib.error.URLError(
+            ConnectionRefusedError(10061, "actively refused it")))
+        self.assertNotEqual(timeout, refused)
+        self.assertIn("TimeoutError", timeout)
+
+    def test_name_resolution_is_distinguishable_from_routing(self) -> None:
+        dns = self.describe(urllib.error.URLError(
+            socket.gaierror(11001, "getaddrinfo failed")))
+        route = self.describe(urllib.error.URLError(
+            OSError(10051, "unreachable network")))
+        self.assertIn("gaierror", dns)
+        self.assertNotIn("gaierror", route)
+
+    def test_a_string_reason_is_kept(self) -> None:
+        text = self.describe(urllib.error.URLError("tunnel connection failed"))
+        self.assertIn("tunnel connection failed", text)
+
+    def test_a_bare_exception_still_describes_itself(self) -> None:
+        self.assertEqual(self.describe(TimeoutError("timed out")),
+                         "TimeoutError")
+
+    def test_the_reason_reaches_the_resolver(self) -> None:
+        # It has to survive the walk through the provider list, or the tooltip
+        # is back to naming wrappers.
+        real = wanip.fetch_text
+        wanip.fetch_text = lambda url, timeout=None: (_ for _ in ()).throw(
+            urllib.error.URLError(ConnectionRefusedError(10061, "refused")))
+        self.addCleanup(setattr, wanip, "fetch_text", real)
+        resolver = wanip.WanIpResolver()
+        resolver.lookup()
+        self.assertIn("ConnectionRefusedError", resolver.last_error)
+        self.assertIn("10061", resolver.last_error)
 
 
 if __name__ == "__main__":

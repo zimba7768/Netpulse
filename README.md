@@ -258,7 +258,7 @@ changes included.
 
 ```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v   # 134 tests
+python -m unittest discover -s tests -v   # 154 tests
 python -m pyflakes netpulse main.py tools tests
 ```
 
@@ -292,6 +292,7 @@ _find-python.bat            shared interpreter discovery
 netpulse/
   config.py                 paths and persisted settings
   units.py                  byte / rate / time formatting
+  log.py                    small capped diagnostic log
   db.py                     SQLite schema, rollups, retention, queries
   engine.py                 background collection loop
   autostart.py              scheduled task / Run key, elevated relaunch
@@ -343,6 +344,30 @@ yours isn't recognised, add it to `TUNNEL_HINTS` in
 `netpulse/collectors/net_system.py`; the Settings page lists every adapter and
 how it is being treated. Figures recorded before 1.1.0 were doubled while a VPN
 was connected — **Settings → Reset all statistics** clears them.
+
+**The public IP works from a script but not in the running app.** Some faults
+only appear after hours of uptime, and a freshly started diagnostic process
+cannot reproduce them by definition. From 1.1.8 the app keeps its own short
+record — **Settings → Open the lookup log**, or `wanip.log` beside the database
+in `%APPDATA%\NetPulse`. It notes each network change by adapter name, every
+failed lookup with the underlying cause per provider, and any unexpected error
+in the loop. Normal running adds a line or two a day; the file is capped and
+trims its oldest half. It contains your public IP address, so read it before
+sending it anywhere.
+
+**Every provider reports the same error.** From 1.1.7 the tooltip names the
+underlying cause rather than the wrapper — `URLError` on its own is compatible
+with a refused connection, a dead route and an unresolvable name, which need
+different fixes. If the `1.1.1.1 (no DNS)` provider fails too, name resolution
+is not the problem: that one is reached by address.
+
+**The WAN IP works from a script but not in the app, only under a VPN.**
+Fixed in 1.1.6. `urllib` builds one opener per process and keeps it in a module
+global, so the proxy configuration it read at the first lookup is reused for the
+life of the program. A ten-second script never notices; a monitor running for
+days across VPNs connecting and disconnecting can end up pinned to a network
+configuration that no longer exists, which looks exactly like being offline.
+Each lookup now builds its own opener and re-reads the settings.
 
 **The WAN IP chip is stuck on "retrying…".** Up to 1.1.1 that could mean the
 lookup thread had died: it had no exception guard, so a single unexpected error

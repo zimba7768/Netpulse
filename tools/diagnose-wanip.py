@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from netpulse.collectors import wanip  # noqa: E402
-from netpulse.collectors.wanip import (ENDPOINTS, WanIpResolver, fetch_text,  # noqa: E402
+from netpulse.collectors.wanip import (ENDPOINTS, WanIpResolver,  # noqa: E402
+                                       describe_error, fetch_text,
                                        network_fingerprint, parse_ip)
 
 try:
@@ -57,9 +58,46 @@ def show_adapters() -> None:
     print()
 
 
+def elevated() -> bool | None:
+    """Whether this process holds administrator rights, or None off Windows."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return None
+
+
+def show_context() -> None:
+    """The two things that differ between this script and the running app."""
+    state = elevated()
+    if state is None:
+        print("Running elevated: not applicable on this platform")
+    else:
+        print(f"Running elevated: {'YES — as administrator' if state else 'no'}")
+    print()
+
+
+def show_proxy() -> None:
+    """Whatever Windows currently reports as the system proxy.
+
+    A stale copy of this, cached inside urllib for the life of the process, is
+    one way a long-running app fails while a fresh script succeeds — so it is
+    worth seeing rather than assuming.
+    """
+    import urllib.request
+    proxies = urllib.request.getproxies()
+    if proxies:
+        print("System proxy configuration:")
+        for scheme, value in sorted(proxies.items()):
+            print(f"  {scheme:8} {value}")
+    else:
+        print("System proxy configuration: none")
+    print()
+
+
 def try_every_provider() -> None:
     """One pass through the list, reporting each answer separately."""
-    print(f"{'Provider':16} {'Result':40} Time")
+    print(f"{'Provider':16} {'Result':52} Time")
     print("-" * 74)
     for url, name in ENDPOINTS:
         started = time.time()
@@ -68,8 +106,8 @@ def try_every_provider() -> None:
             address = parse_ip(raw)
             result = address or f"unrecognised: {raw.strip()[:30]!r}"
         except Exception as exc:
-            result = f"FAILED — {type(exc).__name__}: {exc}"
-        print(f"{name:16} {result[:40]:40} {time.time() - started:.1f}s")
+            result = f"FAILED — {describe_error(exc)}"
+        print(f"{name:16} {result[:52]:52} {time.time() - started:.1f}s")
     print()
 
 
@@ -83,8 +121,10 @@ def main() -> int:
     print()
     show_adapters()
 
-    print("2. Every provider, tried once")
+    print("2. Proxy settings and every provider, tried once")
     print()
+    show_context()
+    show_proxy()
     try_every_provider()
 
     print("3. Live watch — switch your VPN on and off now")

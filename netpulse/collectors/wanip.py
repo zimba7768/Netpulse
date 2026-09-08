@@ -26,6 +26,8 @@ import urllib.request
 
 from PySide6.QtCore import QObject, Signal
 
+from ..log import NULL_LOG
+
 try:
     import psutil
 except ImportError:  # pragma: no cover
@@ -71,11 +73,57 @@ RECHECK_DELAYS = (2.0, 6.0, 15.0, 30.0)
 RETRY_BACKOFF = (5.0, 15.0, 45.0, 120.0, 300.0)
 
 
+def build_opener():
+    """An opener carrying the proxy configuration as it is *right now*.
+
+    ``urllib.request.urlopen`` builds one opener per process and keeps it in a
+    module global, so the proxy settings it was created with — read from the
+    Windows registry at the first request — are then used for the life of the
+    program. For a script that runs for ten seconds this is invisible. For a
+    monitor that runs for days while VPNs connect and disconnect, it means the
+    lookup can be permanently pinned to a network configuration that no longer
+    exists, which is indistinguishable from the internet being unreachable and
+    was reported as exactly that.
+
+    Building a fresh opener per lookup costs nothing measurable and removes a
+    cache that has no business existing in a program whose entire subject is
+    the network changing underneath it.
+    """
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler(urllib.request.getproxies()))
+
+
 def fetch_text(url: str, timeout: float = TIMEOUT) -> str:
     """Fetch a small plain-text body. Separate function so tests can replace it."""
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    request = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, "Connection": "close"})
+    with build_opener().open(request, timeout=timeout) as response:
         return response.read(MAX_BYTES).decode("utf-8", "ignore")
+
+
+def describe_error(exc: BaseException) -> str:
+    """Name what actually failed, not the wrapper around it.
+
+    ``URLError`` wraps the real cause, so reporting its name for every provider
+    is barely better than reporting nothing — which is how a whole round of
+    diagnosis went by with six identical "URLError" entries that ruled nothing
+    in or out. A refused connection, a timed-out route and an unresolvable name
+    are three different faults with three different fixes.
+    """
+    parts = [type(exc).__name__]
+    cause = getattr(exc, "reason", None)
+    if isinstance(cause, BaseException):
+        detail = type(cause).__name__
+        number = getattr(cause, "errno", None) or getattr(cause, "winerror", None)
+        if number:
+            detail += f" {number}"
+        text = (getattr(cause, "strerror", "") or "").strip()
+        if text:
+            detail += f": {text}"
+        parts.append(detail)
+    elif cause:
+        parts.append(str(cause)[:60])
+    return " / ".join(parts)
 
 
 def parse_ip(text: str) -> str:
@@ -157,9 +205,13 @@ class WanIpResolver(QObject):
     #: a lookup is under way after a local network change
     rechecking = Signal()
 
-    def __init__(self, interval: float = 900.0, parent=None) -> None:
+    def __init__(self, interval: float = 900.0, parent=None, log=None) -> None:
         super().__init__(parent)
         self.interval = interval
+        #: Written to only on interesting events, so a day of normal running
+        #: is a handful of lines. This fault only shows itself after hours of
+        #: uptime, which no fresh diagnostic process can reproduce.
+        self.log = log or NULL_LOG
         self.address = ""
         self.source = ""
         self.checked_at = 0.0
@@ -189,6 +241,7 @@ class WanIpResolver(QObject):
     def start(self) -> None:
         if self._thread is not None:
             return
+        self.log.write("resolver started")
         self._stop.clear()
         self._due = [0.0]                      # look up straight away
         self._thread = threading.Thread(target=self._run, name="wan-ip", daemon=True)
@@ -258,6 +311,7 @@ class WanIpResolver(QObject):
         into a single request.
         """
         reasons: list[str] = []
+        attempts: list[str] = []
         order = list(ENDPOINTS)
         if self.preferred:
             order.sort(key=lambda item: item[0] != self.preferred)
@@ -267,15 +321,22 @@ class WanIpResolver(QObject):
             try:
                 address = parse_ip(fetch_text(url))
             except Exception as exc:           # offline, blocked, timed out
-                reasons.append(f"{name}: {type(exc).__name__}")
+                reasons.append(f"{name}: {describe_error(exc)}")
+                attempts.append(f"{name} {type(exc).__name__}")
                 continue
             if address:
                 self.last_error = ""
                 self.preferred = url
+                if attempts:
+                    # Only worth a line when something had to be worked around.
+                    self.log.write(f"lookup ok via {name} after "
+                                   + "; ".join(attempts))
                 return address, name
             reasons.append(f"{name}: unrecognised reply")
+            attempts.append(f"{name} unrecognised")
         # Kept so the interface can explain itself rather than just saying no.
         self.last_error = " · ".join(reasons)
+        self.log.write("lookup FAILED — " + " · ".join(reasons))
         return "", ""
 
     def check(self) -> bool:
@@ -290,6 +351,7 @@ class WanIpResolver(QObject):
             self.suspect = False
             if changed or not self._announced:
                 self._announced = True
+                self.log.write(f"address now {address} (via {source})")
                 self.resolved.emit(address, source)
             return changed
 
@@ -298,6 +360,8 @@ class WanIpResolver(QObject):
             # The network changed and we still cannot confirm an address, so
             # what is on screen is probably wrong. Better blank than lying.
             self.address, self.source = "", ""
+            self.log.write(f"address cleared after {self.failures} failures "
+                           "with the network changed")
             self.resolved.emit("", "")
         elif not self._announced:
             self._announced = True
@@ -326,6 +390,13 @@ class WanIpResolver(QObject):
         """Notice a local change and queue the re-check ladder."""
         current = network_fingerprint()
         if current != self.fingerprint:
+            before = {name for name, _ in self.fingerprint}
+            after = {name for name, _ in current}
+            self.log.write(
+                "network changed — "
+                f"up: {sorted(after - before) or '—'}, "
+                f"down: {sorted(before - after) or '—'}, "
+                f"watching {sorted(after)}")
             self.fingerprint = current
             self.suspect = True
             self.schedule_recheck()
@@ -365,6 +436,7 @@ class WanIpResolver(QObject):
         self.failures += 1
         self.loop_errors += 1
         self.last_error = f"{type(exc).__name__}: {exc}"
+        self.log.write(f"UNEXPECTED loop error: {type(exc).__name__}: {exc}")
         if not self.checked_at:
             # Nothing has ever succeeded, so the interface is still waiting on
             # a first answer. Give it one, or it waits forever.

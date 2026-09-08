@@ -12,6 +12,8 @@ from .collectors.net_etw import EtwNetCollector
 from .collectors.net_system import (DIRECT, VPN, SystemNetCollector,
                                     vpn_active)
 from .collectors.wanip import WanIpResolver
+from .config import data_dir
+from .log import RollingLog
 
 LIVE_WINDOW_SECONDS = 120
 
@@ -36,7 +38,9 @@ class Engine(QObject):
         self.etw = EtwNetCollector()
         self.files = FileTracker(db, settings, on_new=self._on_file,
                                  link_of=self.current_link)
-        self.wan = WanIpResolver()
+        #: Kept beside the database, so "send me the log" is one path.
+        self.wan_log = RollingLog(data_dir() / "wanip.log")
+        self.wan = WanIpResolver(log=self.wan_log)
         #: (timestamp, direct down, direct up, vpn down, vpn up) in bytes/sec
         self.live: deque[tuple[float, float, float, float, float]] = deque(
             maxlen=LIVE_WINDOW_SECONDS)

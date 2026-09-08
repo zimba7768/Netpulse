@@ -694,6 +694,21 @@ class SettingsPage(Page):
         wan_note.setContentsMargins(26, 0, 0, 4)
         collection.add(wan_note)
 
+        # A lookup that only misbehaves after hours of uptime cannot be
+        # reproduced from a fresh process, so the app keeps its own short
+        # record of what it tried and what came back.
+        log_row = QHBoxLayout()
+        log_row.setContentsMargins(26, 0, 0, 4)
+        self.wan_log_button = QPushButton("Open the lookup log")
+        self.wan_log_button.setObjectName("Secondary")
+        self.wan_log_button.setCursor(Qt.PointingHandCursor)
+        self.wan_log_button.clicked.connect(self._open_wan_log)
+        log_row.addWidget(self.wan_log_button)
+        log_row.addStretch(1)
+        log_holder = QWidget()
+        log_holder.setLayout(log_row)
+        collection.add(log_holder)
+
         min_row = QHBoxLayout()
         min_row.addWidget(QLabel("Ignore files smaller than"))
         self.min_size = QSpinBox()
@@ -827,6 +842,17 @@ class SettingsPage(Page):
         body.addStretch(1)
 
     # ------------------------------------------------------------------ slots
+    def _open_wan_log(self) -> None:
+        """Show the public-IP lookup log in whatever opens text files."""
+        path = getattr(self.engine, "wan_log", None)
+        target = getattr(path, "path", None)
+        if target is None:
+            return
+        if not target.exists():
+            target.write_text(
+                "No lookup events recorded yet.\n", encoding="utf-8")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
     def _change_units(self, index: int) -> None:
         self.settings.set("units", ["auto", "KB", "MB", "GB"][index])
 
