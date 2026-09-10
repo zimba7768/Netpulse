@@ -1,0 +1,9 @@
+﻿Follow the public IP across network changes, and show the working
+
+Each lookup now builds its own opener rather than reusing the one urllib
+caches per process, so a VPN connecting mid-session is no longer invisible.
+Adds a capped diagnostic log, a manual re-check, and tools that measure the
+direct/VPN split and compare interpreters.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AJhA3ima1RjyG9dZpap6xR

@@ -699,6 +699,12 @@ class SettingsPage(Page):
         # record of what it tried and what came back.
         log_row = QHBoxLayout()
         log_row.setContentsMargins(26, 0, 0, 4)
+        self.wan_now_button = QPushButton("Check my public IP now")
+        self.wan_now_button.setObjectName("Secondary")
+        self.wan_now_button.setCursor(Qt.PointingHandCursor)
+        self.wan_now_button.clicked.connect(self._check_wan_now)
+        log_row.addWidget(self.wan_now_button)
+
         self.wan_log_button = QPushButton("Open the lookup log")
         self.wan_log_button.setObjectName("Secondary")
         self.wan_log_button.setCursor(Qt.PointingHandCursor)
@@ -842,6 +848,16 @@ class SettingsPage(Page):
         body.addStretch(1)
 
     # ------------------------------------------------------------------ slots
+    def _check_wan_now(self) -> None:
+        """Force a lookup, rather than waiting for the next scheduled one.
+
+        Restarting the app was the only way to make it look again immediately,
+        which turned "is it stale?" into a question that could not be answered
+        without destroying the state that would have answered it.
+        """
+        self.engine.wan.log.write("manual re-check requested")
+        self.engine.wan.refresh_now()
+
     def _open_wan_log(self) -> None:
         """Show the public-IP lookup log in whatever opens text files."""
         path = getattr(self.engine, "wan_log", None)

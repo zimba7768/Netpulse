@@ -76,5 +76,38 @@ class VpnNoticeTests(unittest.TestCase):
         self.assertFalse(page.vpn_notice.isVisible())
 
 
+class ManualRecheckTests(unittest.TestCase):
+    """The button that answers "is the displayed address stale?" in place.
+
+    Before it existed, the only way to make the app look again was to restart
+    it — which destroys the long-running state that causes the fault, so the
+    test and the bug could never coexist.
+    """
+
+    def setUp(self) -> None:
+        self.dir = tempfile.mkdtemp(prefix="netpulse-recheck-")
+        self.db = Database(os.path.join(self.dir, f"n_{time.time_ns()}.db"))
+        self.settings = Settings()
+        self.engine = Engine(self.db, self.settings)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_the_button_queues_a_lookup_immediately(self) -> None:
+        page = pages.SettingsPage(self.db, self.engine, self.settings)
+        self.engine.wan._due.clear()
+        page._check_wan_now()
+        self.assertTrue(self.engine.wan._pending(),
+                        "no lookup was queued")
+
+    def test_it_is_recorded_so_the_log_shows_who_asked(self) -> None:
+        written = []
+        self.engine.wan.log = type("L", (), {"write": lambda _s, m: written.append(m)})()
+        page = pages.SettingsPage(self.db, self.engine, self.settings)
+        page._check_wan_now()
+        self.assertTrue(any("manual" in m for m in written))
+
+
 if __name__ == "__main__":
     unittest.main()

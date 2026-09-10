@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "NetPulse"
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.11"
 
 IS_WINDOWS = sys.platform.startswith("win")
 

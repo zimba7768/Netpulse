@@ -8,8 +8,12 @@ watches. Nothing is written and nothing else in NetPulse is started.
 """
 from __future__ import annotations
 
+import ipaddress
+import os
 import socket
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +31,20 @@ try:
 except ImportError:
     psutil = None
 
-RUN_SECONDS = int(sys.argv[1]) if len(sys.argv) > 1 else 180
+ARGS = sys.argv[1:]
+#: Write to a file instead of the console. pythonw.exe has no console at all,
+#: so this is the only way to see what it did.
+OUT_FILE = ""
+if "--out" in ARGS:
+    index = ARGS.index("--out")
+    OUT_FILE = ARGS[index + 1]
+    del ARGS[index:index + 2]
+#: Run the provider list under this interpreter *and* its windowed twin.
+COMPARE = "--compare" in ARGS
+if COMPARE:
+    ARGS.remove("--compare")
+#: 0 means "providers only" — no live watch.
+RUN_SECONDS = int(ARGS[0]) if ARGS else 180
 
 
 def stamp() -> str:
@@ -95,8 +112,12 @@ def show_proxy() -> None:
     print()
 
 
-def try_every_provider() -> None:
-    """One pass through the list, reporting each answer separately."""
+def try_every_provider() -> str:
+    """One pass through the list, reporting each answer separately.
+
+    Returns the first address obtained, so two interpreters can be compared.
+    """
+    found = ""
     print(f"{'Provider':16} {'Result':52} Time")
     print("-" * 74)
     for url, name in ENDPOINTS:
@@ -104,14 +125,108 @@ def try_every_provider() -> None:
         try:
             raw = fetch_text(url)
             address = parse_ip(raw)
+            found = found or address
             result = address or f"unrecognised: {raw.strip()[:30]!r}"
         except Exception as exc:
             result = f"FAILED — {describe_error(exc)}"
         print(f"{name:16} {result[:52]:52} {time.time() - started:.1f}s")
     print()
+    return found
+
+
+def windowed_twin() -> Path | None:
+    """pythonw.exe beside this python.exe, if it exists.
+
+    The app is launched with the windowed interpreter so it has no console
+    window. That makes it a *different executable* to the one every diagnostic
+    has used — and per-application VPN rules, split tunnelling and firewalls
+    all match on the executable. Two interpreters, two network paths, and no
+    way to see it without running both.
+    """
+    override = os.environ.get("NETPULSE_ALT_PYTHON")
+    if override:
+        return Path(override)
+    twin = Path(sys.executable).with_name("pythonw.exe")
+    return twin if twin.exists() else None
+
+
+def compare_verdict(mine: str, theirs: str, twin_name: str) -> str:
+    """What two interpreters seeing two different public addresses means."""
+    if mine and theirs and mine != theirs:
+        return (
+            "VERDICT: the two interpreters have DIFFERENT public addresses.\n"
+            "They are taking different routes to the internet, so a\n"
+            "per-application rule — a VPN bypass or split-tunnel list, or a\n"
+            "firewall rule — is matching one executable and not the other.\n"
+            f"The app runs {twin_name}, so that is the name to look for in\n"
+            "Surfshark's Bypasser list.")
+    if mine and theirs:
+        return ("VERDICT: both interpreters see the same address, so the app's\n"
+                "traffic takes the same route as this script's. The difference\n"
+                "is somewhere else.")
+    if mine and not theirs:
+        return (f"VERDICT: {twin_name} could not reach any provider while this\n"
+                "one could. Same conclusion — something is treating the two\n"
+                "executables differently — and it is blocking rather than\n"
+                "merely rerouting.")
+    if theirs and not mine:
+        return (f"VERDICT: only {twin_name} could reach a provider, which is\n"
+                "the reverse of the reported fault. Worth re-running.")
+    return ("VERDICT: neither could reach a provider — nothing to compare.\n"
+            "Check that the VPN is connected and try again.")
+
+
+def compare_interpreters(mine: str) -> int:
+    """Run the same provider sweep under the windowed interpreter."""
+    twin = windowed_twin()
+    print("=" * 74)
+    if twin is None:
+        print("No windowed interpreter (pythonw.exe) found beside this one, so")
+        print("there is nothing to compare against.")
+        print("=" * 74)
+        return 0
+
+    print(f"Now the same lookup under {twin.name}, which is what the app runs.")
+    print()
+    scratch = Path(tempfile.gettempdir()) / "netpulse-pythonw-check.txt"
+    try:
+        subprocess.run([str(twin), os.path.abspath(__file__), "0",
+                        "--out", str(scratch)], timeout=180, check=False)
+        report = scratch.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        print(f"Could not run it: {type(exc).__name__}: {exc}")
+        print("=" * 74)
+        return 1
+
+    theirs = ""
+    for line in report.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            try:
+                ipaddress.ip_address(parts[1])
+                theirs = parts[1]
+                break
+            except ValueError:
+                continue
+
+    for line in report.splitlines():
+        if line.strip() and not line.startswith("="):
+            print(line)
+
+    print("=" * 74)
+    print(f"  {Path(sys.executable).name:16} saw {mine or '(nothing)'}")
+    print(f"  {twin.name:16} saw {theirs or '(nothing)'}")
+    print()
+    print(compare_verdict(mine, theirs, twin.name))
+    print("=" * 74)
+    return 0
 
 
 def main() -> int:
+    if OUT_FILE:
+        # pythonw has no console; everything has to go to the file.
+        sys.stdout = open(OUT_FILE, "w", encoding="utf-8", buffering=1)
+
     print("=" * 74)
     print("NetPulse — public IP diagnosis")
     print("=" * 74)
@@ -125,7 +240,12 @@ def main() -> int:
     print()
     show_context()
     show_proxy()
-    try_every_provider()
+    mine = try_every_provider()
+
+    if COMPARE:
+        return compare_interpreters(mine)
+    if RUN_SECONDS <= 0:
+        return 0
 
     print("3. Live watch — switch your VPN on and off now")
     print(f"   Running for {RUN_SECONDS}s. Ctrl-C to stop early.")

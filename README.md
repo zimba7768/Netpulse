@@ -258,7 +258,7 @@ changes included.
 
 ```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v   # 154 tests
+python -m unittest discover -s tests -v   # 163 tests
 python -m pyflakes netpulse main.py tools tests
 ```
 
@@ -344,6 +344,23 @@ yours isn't recognised, add it to `TUNNEL_HINTS` in
 `netpulse/collectors/net_system.py`; the Settings page lists every adapter and
 how it is being treated. Figures recorded before 1.1.0 were doubled while a VPN
 was connected — **Settings → Reset all statistics** clears them.
+
+**The public IP is right when I start the app, wrong after the VPN changes.**
+That was the shape of the real fault, fixed in 1.1.6: `urllib` cached one
+opener per process, so the network configuration read at the first lookup was
+reused for the life of the program — a restart appeared to fix it because a
+restart is the only thing that clears a per-process cache. **Settings → Check
+my public IP now** forces a fresh lookup, so the question can be answered
+without restarting the thing you are trying to observe.
+
+**The public IP shows my ISP's address while a VPN is connected.** The app is
+launched with `pythonw.exe`, so it has no console window; a diagnostic run from
+a Command Prompt is `python.exe`. Per-application VPN rules, split-tunnel lists
+and firewall rules all match on the executable, so those are two different
+network identities — one can be inside the tunnel while the other is outside it.
+`python tools/diagnose-wanip.py 0 --compare` runs the same lookup under both and
+reports whether they see the same public address. If they differ, look for
+`pythonw.exe` in your VPN client's bypass list.
 
 **The public IP works from a script but not in the running app.** Some faults
 only appear after hours of uptime, and a freshly started diagnostic process
